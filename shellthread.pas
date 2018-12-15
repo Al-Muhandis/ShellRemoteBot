@@ -5,7 +5,7 @@ unit shellthread;
 interface
 
 uses
-  Classes, SysUtils, tgtypes, tgsendertypes, process, eventlog
+  Classes, SysUtils, tgtypes, tgsendertypes, process, eventlog, tgshbot
   {$IFDEF MSWINDOWS}, Windows{$ENDIF}
   ;
 
@@ -16,12 +16,11 @@ type
   TShellThread=class(TThread)
   private
     FLogger: TEventLog;
-    FBot: TTelegramSender;
+    FBot: TTgShBot;
     FProc: TProcess;
     FTerminated: Boolean;
     FLPTimeout: Integer;
     procedure BotReceiveMessage({%H-}ASender: TObject; AMessage: TTelegramMessageObj);
-    procedure BotLogMessage({%H-}ASender: TObject; EventType: TEventType; const Msg: String);
     function GetLogger: TEventLog;
     procedure OutputStd;
     procedure SetLogger(AValue: TEventLog);
@@ -35,7 +34,7 @@ type
 implementation
 
 uses
-  configuration, tgshbot
+  configuration
   ;
 
 { TShellThread }
@@ -75,26 +74,19 @@ begin
   begin
     OutputStd;
     FProc.Input.Write(InputString[1], Length(InputString));
-    sleep(50);
     OutputStd;
   end;
-end;
-
-procedure TShellThread.BotLogMessage(ASender: TObject; EventType: TEventType;
-  const Msg: String);
-begin
-  Logger.Log(EventType, Msg);
 end;
 
 procedure TShellThread.OutputStd;
 var
   CharBuffer: array [0..511] of char;
   ReadCount: integer;
-  OutputString, Msg: String;
+  OutputString: String;
 const
-  MaxMsgLength = 4096;   // maximum message length to send
-  MsgPartLength = 3000;
+  SleepForOut = 100;  // Pause to wait for output
 begin
+  Sleep(SleepForOut);
   OutputString:=EmptyStr;
   while FProc.Output.NumBytesAvailable > 0 do
   begin
@@ -105,20 +97,8 @@ begin
     OutputString+=Copy(CharBuffer, 0, ReadCount);
 //    Write(StdOut, OutputString); // You can uncomment for debug
   end;
-  if OutputString<>EmptyStr then
-  begin
-    Msg:=IsolateShellOutput(OutputString);
-    if Length(Msg)<MaxMsgLength then
-      FBot.sendMessage(Msg, pmMarkdown)
-    else begin
-      while OutputString<>EmptyStr do
-      begin
-        Msg:=LeftStr(OutputString, MsgPartLength);
-        OutputString:=RightStr(OutputString, Length(OutputString)-Length(Msg));
-        FBot.sendMessage(IsolateShellOutput(Msg), pmMarkdown);
-      end;
-    end;
-  end;
+  if not FBot.sendMessageCode(OutputString) then
+    Logger.Error('['+ClassName+'.OutpuStd] Cant send message to bot!');
   // read stderr and write to our stderr ... crashing :((
   { while FProc.Stderr.NumBytesAvailable > 0 do
   begin
@@ -135,21 +115,19 @@ begin
   FreeOnTerminate:=False;
   TelegramAPI_URL:=Cnfg.APIEndPoint; // For Russian specific case
   FBot:=TTgShBot.Create(Cnfg.BotTooken);
+  FBot.Logger:=Logger;
   if FBot.Token=EmptyStr then
   begin
     Logger.Error('Please, specify bot token in telegram.ini!');
     Exit;
   end;
   FBot.OnReceiveMessage:=@BotReceiveMessage;
-  FBot.OnLogMessage:=@BotLogMessage;
   {$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
   FProc:=TProcess.Create(nil);
   FProc.Options := [poUsePipes, poStderrToOutPut];
   FProc.Executable:={$IFDEF MSWINDOWS}'cmd'{$ELSE}'sh'{$ENDIF};
   FProc.Execute;
-  sleep(50);
-  OutputStd;
   FTerminated:=False;
   FLPTimeout:=Cnfg.APITimeout;
 end;
@@ -163,6 +141,7 @@ end;
 
 procedure TShellThread.Execute;
 begin
+  OutputStd;
   while not Terminated do
     FBot.getUpdatesEx(0, FLPTimeout);
 end;
