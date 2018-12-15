@@ -17,11 +17,18 @@ type
     function IsBanned(ChatID: Int64): Boolean; override;
   end;
 
+function IsolateShellOutput(const S: String): String;
+
 implementation
 
 uses
   configuration
   ;
+
+function IsolateShellOutput(const S: String): String;
+begin
+  Result:='```bash'+LineEnding+S+LineEnding+'```';
+end;
 
 { TTgShBot }
 

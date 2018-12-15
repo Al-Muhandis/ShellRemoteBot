@@ -90,7 +90,10 @@ procedure TShellThread.OutputStd;
 var
   CharBuffer: array [0..511] of char;
   ReadCount: integer;
-  OutputString: String;
+  OutputString, Msg: String;
+const
+  MaxMsgLength = 4096;   // maximum message length to send
+  MsgPartLength = 3000;
 begin
   OutputString:=EmptyStr;
   while FProc.Output.NumBytesAvailable > 0 do
@@ -103,7 +106,19 @@ begin
 //    Write(StdOut, OutputString); // You can uncomment for debug
   end;
   if OutputString<>EmptyStr then
-    FBot.sendMessage('```bash'+LineEnding+OutputString+LineEnding+'```', pmMarkdown);
+  begin
+    Msg:=IsolateShellOutput(OutputString);
+    if Length(Msg)<MaxMsgLength then
+      FBot.sendMessage(Msg, pmMarkdown)
+    else begin
+      while OutputString<>EmptyStr do
+      begin
+        Msg:=LeftStr(OutputString, MsgPartLength);
+        OutputString:=RightStr(OutputString, Length(OutputString)-Length(Msg));
+        FBot.sendMessage(IsolateShellOutput(Msg), pmMarkdown);
+      end;
+    end;
+  end;
   // read stderr and write to our stderr ... crashing :((
   { while FProc.Stderr.NumBytesAvailable > 0 do
   begin
