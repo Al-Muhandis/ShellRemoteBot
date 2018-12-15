@@ -21,8 +21,12 @@ type
     FTerminated: Boolean;
     FLPTimeout: Integer;
     procedure BotReceiveMessage({%H-}ASender: TObject; AMessage: TTelegramMessageObj);
+    { Read output from shell terminal by command }
+    procedure BotReceiveReadCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      {%H-}AMessage: TTelegramMessageObj);
+    function CheckIsAdmin: Boolean;
     function GetLogger: TEventLog;
-    procedure OutputStd;
+    procedure OutputStd(const NoOutput: String = '');
     procedure SetLogger(AValue: TEventLog);
     property Logger: TEventLog read GetLogger write SetLogger;
   public
@@ -61,11 +65,8 @@ procedure TShellThread.BotReceiveMessage(ASender: TObject;
 var
   InputString: String;
 begin
-  if FBot.CurrentIsSimpleUser then
-  begin
-    FBot.sendMessage('You cannot access to this bot!');
+  if not CheckIsAdmin then
     Exit;
-  end;
   InputString:=AMessage.Text;
   if InputString=EmptyStr then
     Exit;
@@ -78,7 +79,25 @@ begin
   end;
 end;
 
-procedure TShellThread.OutputStd;
+procedure TShellThread.BotReceiveReadCommand(ASender: TObject;
+  const ACommand: String; AMessage: TTelegramMessageObj);
+begin
+  FBot.UpdateProcessed:=True;  // There is no point in further processing
+  if not CheckIsAdmin then
+    Exit;
+  OutputStd('No new messages in the terminal');
+end;
+
+function TShellThread.CheckIsAdmin: Boolean;
+begin
+  Result:=not FBot.CurrentIsSimpleUser;
+  if not Result then
+    FBot.sendMessage('You cannot access to this bot!')
+  else
+    Result:=True;
+end;
+
+procedure TShellThread.OutputStd(const NoOutput: String);
 var
   CharBuffer: array [0..511] of char;
   ReadCount: integer;
@@ -97,8 +116,11 @@ begin
     OutputString+=Copy(CharBuffer, 0, ReadCount);
 //    Write(StdOut, OutputString); // You can uncomment for debug
   end;
-  if not FBot.sendMessageCode(OutputString) then
-    Logger.Error('['+ClassName+'.OutpuStd] Cant send message to bot!');
+  if (OutputString=EmptyStr) and (NoOutput<>EmptyStr) then
+    FBot.sendMessageSafe(NoOutput)
+  else
+    if not FBot.sendMessageCode(OutputString) then
+      Logger.Error('['+ClassName+'.OutpuStd] Cant send message to bot!');
   // read stderr and write to our stderr ... crashing :((
   { while FProc.Stderr.NumBytesAvailable > 0 do
   begin
@@ -121,7 +143,10 @@ begin
     Logger.Error('Please, specify bot token in telegram.ini!');
     Exit;
   end;
+//  FBot.LogDebug:=True;
   FBot.OnReceiveMessage:=@BotReceiveMessage;
+  { Read output of shell terminal called by user via /read command }
+  FBot.CommandHandlers['/read']:=@BotReceiveReadCommand;
   {$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
   FProc:=TProcess.Create(nil);

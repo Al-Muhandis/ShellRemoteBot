@@ -117,10 +117,11 @@
     </RunParams>
     <RequiredPackages Count="4">
       <Item1>
-        <PackageName Value="lazdaemon"/>
+        <PackageName Value="fptelegram"/>
+        <MinVersion Build="11" Valid="True"/>
       </Item1>
       <Item2>
-        <PackageName Value="fptelegram"/>
+        <PackageName Value="lazdaemon"/>
       </Item2>
       <Item3>
         <PackageName Value="LCL"/>
