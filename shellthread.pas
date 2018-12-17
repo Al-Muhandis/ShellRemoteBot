@@ -24,9 +24,25 @@ type
     { Read output from shell terminal by command }
     procedure BotReceiveReadCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       {%H-}AMessage: TTelegramMessageObj);
+    {$IFDEF UNIX}
+    procedure BotReceiveSIGCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      {%H-}AMessage: TTelegramMessageObj);
+    { procedure emulate SIGINT (Ctrl+C) }
+    procedure BotReceiveSIGINTCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      {%H-}AMessage: TTelegramMessageObj);
+    procedure BotReceiveSIGKILLCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      {%H-}AMessage: TTelegramMessageObj);
+    { procedure emulate SIGQUIT (Ctrl+\) }
+    procedure BotReceiveSIGQUITCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      {%H-}AMessage: TTelegramMessageObj);
+    procedure BotReceiveSIGTERMCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      {%H-}AMessage: TTelegramMessageObj);
+    {$ENDIF}
     function CheckIsAdmin: Boolean;
     function GetLogger: TEventLog;
     procedure OutputStd(const NoOutput: String = '');
+    procedure SendToShellTerminal(const InputString: String);
+    {$IFDEF UNIX}procedure SendSIG(SigNumber: Byte);{$ENDIF}
     procedure SetLogger(AValue: TEventLog);
     property Logger: TEventLog read GetLogger write SetLogger;
   public
@@ -38,8 +54,22 @@ type
 implementation
 
 uses
-  configuration
+  configuration{$IFDEF UNIX}, strutils {$ENDIF}
   ;
+
+{$IFDEF UNIX}
+const
+  { POSIX signals }
+  {%H-}SIGABRT = 6;
+  {%H-}SIGALRM = 14;
+  {%H-}SIGHUP  = 1;
+  SIGINT  = 2;
+  SIGKILL = 9;
+  SIGQUIT = 3;
+  SIGTERM = 15;
+  {%H-}SIGTRAP = 5;
+{$ENDIF}
+
 
 { TShellThread }
 
@@ -72,11 +102,7 @@ begin
     Exit;
   InputString+=LineEnding;
   if FProc.Running then
-  begin
-    OutputStd;
-    FProc.Input.Write(InputString[1], Length(InputString));
-    OutputStd;
-  end;
+    SendToShellTerminal(InputString);
 end;
 
 procedure TShellThread.BotReceiveReadCommand(ASender: TObject;
@@ -87,6 +113,50 @@ begin
     Exit;
   OutputStd('No new messages in the terminal');
 end;
+
+{$IFDEF UNIX}
+procedure TShellThread.BotReceiveSIGCommand(ASender: TObject;
+  const ACommand: String; AMessage: TTelegramMessageObj);
+var
+  i: LongInt;
+begin
+  FBot.UpdateProcessed:=True;  // There is no point in further processing
+  if not CheckIsAdmin then
+    Exit;
+  if FProc.Running then
+    if TryStrToInt(ExtractDelimited(2, AMessage.Text, [' ']), i) then
+      if i<=High(Byte) then
+        SendSIG(i)
+      else
+        FBot.sendMessageSafe('SIG number limit by 255!')
+    else
+      FBot.sendMessageSafe('Please, specify SIG portable number. For example:'+LineEnding+
+        '```BASH'+LineEnding+'/sig 3```'+LineEnding+'where `3` - is SIGQUIT', pmMarkdown);
+end;
+procedure TShellThread.BotReceiveSIGINTCommand(ASender: TObject;
+  const ACommand: String; AMessage: TTelegramMessageObj);
+begin
+  SendSIG(SIGINT);
+end;
+
+procedure TShellThread.BotReceiveSIGKILLCommand(ASender: TObject;
+  const ACommand: String; AMessage: TTelegramMessageObj);
+begin
+  SendSIG(SIGKILL);
+end;
+
+procedure TShellThread.BotReceiveSIGQUITCommand(ASender: TObject;
+  const ACommand: String; AMessage: TTelegramMessageObj);
+begin
+  SendSIG(SIGQUIT);
+end;
+
+procedure TShellThread.BotReceiveSIGTERMCommand(ASender: TObject;
+  const ACommand: String; AMessage: TTelegramMessageObj);
+begin
+  SendSIG(SIGTERM);
+end;
+{$ENDIF}
 
 function TShellThread.CheckIsAdmin: Boolean;
 begin
@@ -131,6 +201,23 @@ begin
   end; }
 end;
 
+procedure TShellThread.SendToShellTerminal(const InputString: String);
+begin
+  OutputStd;
+  FProc.Input.Write(InputString[1], Length(InputString));
+  OutputStd;
+end;
+
+{$IFDEF UNIX}
+procedure TShellThread.SendSIG(SigNumber: Byte);
+var
+  Sig: String;
+begin
+  Sig:=AnsiChar(SigNumber)+LineEnding;
+  SendToShellTerminal(Sig);
+end;
+{$ENDIF}
+
 constructor TShellThread.Create;
 begin
   inherited Create(True);
@@ -146,8 +233,13 @@ begin
 //  FBot.LogDebug:=True;
   FBot.OnReceiveMessage:=@BotReceiveMessage;
   { Read output of shell terminal called by user via /read command }
-  FBot.CommandHandlers['/read']:=@BotReceiveReadCommand;
-  {$IFDEF MSWINDOWS}
+  FBot.CommandHandlers['/read']:=@BotReceiveReadCommand;{$IFDEF UNIX}
+  FBot.CommandHandlers['/sig']:=@BotReceiveSigCommand;
+  FBot.CommandHandlers['/sigint']:=@BotReceiveSIGINTCommand;
+  FBot.CommandHandlers['/sigkill']:=@BotReceiveSIGKILLCommand;
+  FBot.CommandHandlers['/sigquit']:=@BotReceiveSIGQUITCommand;
+  FBot.CommandHandlers['/sigterm']:=@BotReceiveSIGTERMCommand;
+  {$ENDIF}{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
   FProc:=TProcess.Create(nil);
   FProc.Options := [poUsePipes, poStderrToOutPut];
