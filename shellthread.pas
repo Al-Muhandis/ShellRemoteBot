@@ -38,6 +38,7 @@ type
     procedure BotReceiveSIGTERMCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       {%H-}AMessage: TTelegramMessageObj);
     {$ENDIF}
+    function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
     function GetLogger: TEventLog;
     procedure OutputStd(const NoOutput: String = '');
@@ -95,23 +96,20 @@ procedure TShellThread.BotReceiveMessage(ASender: TObject;
 var
   InputString: String;
 begin
-  if not CheckIsAdmin then
+  if not CommandStart then
     Exit;
   InputString:=AMessage.Text;
   if InputString=EmptyStr then
     Exit;
   InputString+=LineEnding;
-  if FProc.Running then
-    SendToShellTerminal(InputString);
+  SendToShellTerminal(InputString);
 end;
 
 procedure TShellThread.BotReceiveReadCommand(ASender: TObject;
   const ACommand: String; AMessage: TTelegramMessageObj);
 begin
-  FBot.UpdateProcessed:=True;  // There is no point in further processing
-  if not CheckIsAdmin then
-    Exit;
-  OutputStd('No new messages in the terminal');
+  if CommandStart then
+    OutputStd('No new messages in the terminal');
 end;
 
 {$IFDEF UNIX}
@@ -120,42 +118,55 @@ procedure TShellThread.BotReceiveSIGCommand(ASender: TObject;
 var
   i: LongInt;
 begin
-  FBot.UpdateProcessed:=True;  // There is no point in further processing
-  if not CheckIsAdmin then
+  if not CommandStart then
     Exit;
-  if FProc.Running then
-    if TryStrToInt(ExtractDelimited(2, AMessage.Text, [' ']), i) then
-      if i<=High(Byte) then
-        SendSIG(i)
-      else
-        FBot.sendMessageSafe('SIG number limit by 255!')
+  if TryStrToInt(ExtractDelimited(2, AMessage.Text, [' ']), i) then
+    if i<=High(Byte) then
+      SendSIG(i)
     else
-      FBot.sendMessageSafe('Please, specify SIG portable number. For example:'+LineEnding+
-        '```BASH'+LineEnding+'/sig 3```'+LineEnding+'where `3` - is SIGQUIT', pmMarkdown);
+      FBot.sendMessageSafe('SIG number limit by 255!')
+  else
+    FBot.sendMessageSafe('Please, specify SIG portable number. For example:'+LineEnding+
+      '```BASH'+LineEnding+'/sig 3```'+LineEnding+'where `3` - is SIGQUIT', pmMarkdown);
 end;
 procedure TShellThread.BotReceiveSIGINTCommand(ASender: TObject;
   const ACommand: String; AMessage: TTelegramMessageObj);
 begin
+  if not CommandStart then
+    Exit;
   SendSIG(SIGINT);
 end;
 
 procedure TShellThread.BotReceiveSIGKILLCommand(ASender: TObject;
   const ACommand: String; AMessage: TTelegramMessageObj);
 begin
+  if not CommandStart then
+    Exit;
   SendSIG(SIGKILL);
 end;
 
 procedure TShellThread.BotReceiveSIGQUITCommand(ASender: TObject;
   const ACommand: String; AMessage: TTelegramMessageObj);
 begin
+  if not CommandStart then
+    Exit;
   SendSIG(SIGQUIT);
 end;
 
 procedure TShellThread.BotReceiveSIGTERMCommand(ASender: TObject;
   const ACommand: String; AMessage: TTelegramMessageObj);
 begin
+  if not CommandStart then
+    Exit;
   SendSIG(SIGTERM);
 end;
+
+function TShellThread.CommandStart: Boolean;
+begin
+  FBot.UpdateProcessed:=True;  // There is no point in further processing
+  Result:=CheckIsAdmin and FProc.Running;
+end;
+
 {$ENDIF}
 
 function TShellThread.CheckIsAdmin: Boolean;
@@ -213,7 +224,7 @@ procedure TShellThread.SendSIG(SigNumber: Byte);
 var
   Sig: String;
 begin
-  Sig:=AnsiChar(SigNumber)+LineEnding;
+  Sig:=chr(SigNumber){+LineEnding};
   SendToShellTerminal(Sig);
 end;
 {$ENDIF}
@@ -242,7 +253,7 @@ begin
   {$ENDIF}{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
   FProc:=TProcess.Create(nil);
-  FProc.Options := [poUsePipes, poStderrToOutPut];
+  FProc.Options := [poUsePipes, poStderrToOutPut, poNoConsole];
   FProc.Executable:={$IFDEF MSWINDOWS}'cmd'{$ELSE}'sh'{$ENDIF};
   FProc.Execute;
   FTerminated:=False;
