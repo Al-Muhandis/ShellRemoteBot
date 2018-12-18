@@ -127,7 +127,7 @@ begin
       FBot.sendMessageSafe('SIG number limit by 255!')
   else
     FBot.sendMessageSafe('Please, specify SIG portable number. For example:'+LineEnding+
-      '```BASH'+LineEnding+'/sig 3```'+LineEnding+'where `3` - is SIGQUIT', pmMarkdown);
+      '```sh'+LineEnding+'/sig 3```'+LineEnding+'where `3` - is SIGQUIT', pmMarkdown);
 end;
 procedure TShellThread.BotReceiveSIGINTCommand(ASender: TObject;
   const ACommand: String; AMessage: TTelegramMessageObj);
