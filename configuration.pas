@@ -50,12 +50,12 @@ end;
 
 function TConfig.GetAPITimeout: Integer;
 begin
-  Result:=FIni.ReadInteger('API', 'Timeout', 50);   // 50 sec for longpolling request ??
+  Result:=FIni.ReadInteger('API', 'Timeout', 20);   // 20 sec for longpolling request ??
 end;
 
 function TConfig.GetBotTooken: String;
 begin
-  Result:=FIni.ReadString('Bot', 'Token', EmptyStr)
+  Result:=FIni.ReadString('API', 'Token', EmptyStr)
 end;
 
 function TConfig.GetUsers(UserID: Int64): TUserStatus;
@@ -99,7 +99,7 @@ end;
 
 initialization
   CnfDir:=IncludeTrailingPathDelimiter(ExtractFileDir(ParamStr(0)));
-  Cnfg:=TConfig.Create(CnfDir+'telegram.ini');
+  Cnfg:=TConfig.Create(CnfDir+ChangeFileExt(ExtractFileName(ParamStr(0)), '.ini'));
 
 finalization
   FreeAndNil(Cnfg);

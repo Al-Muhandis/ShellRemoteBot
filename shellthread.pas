@@ -271,7 +271,10 @@ procedure TShellThread.Execute;
 begin
   OutputStd;
   while not Terminated do
+  begin
     FBot.getUpdatesEx(0, FLPTimeout);
+    OutputStd;
+  end;
 end;
 
 end.

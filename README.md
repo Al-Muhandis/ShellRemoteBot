@@ -1,4 +1,5 @@
-# ShellRemoteBot
+# Description
+
 Shell remote control from telegram
 
 ShellRemoteBot 
@@ -11,15 +12,15 @@ The program can run as a regular console program or run as a daemon/service.
 
 Tested in Linux but You can try to use in other OS also. Developed with FreePascal. It depends on fp-telegram lib .
 
+# Installation
+
 1. Create bot https://core.telegram.org/bots/#3-how-do-i-create-a-bot . You must select longpolling method for getting updates.
-2. Create config ini file `telegram.ini` in app folder:
+2. Create config ini file `tgshd.ini` in app folder:
 
 ``` INI
-[Bot]
+[API]
 ;; Specify Your token
 Token=
-
-[API]
 ;; Actual if telegram server is blocked in server/computer region
 Endpoint=https://api.telegram.org/bot
 ;; Timeout for lognpolling requests while getting updates
@@ -28,7 +29,24 @@ Timeout=20
 [Users]
 ;; Specify all admin users (Telegram UserID [Integer]). For example: 
 ;;123456789=a
+;; where 'a' character is means administrator, 'b' - banned
 YOUR_User_ID=a
 ```
 
 3. Run as a console program or daemon/service.
+
+# Users rights and telegram user ID
+You can define user access in configuration file `tgshd.ini` by adding string like `user_id=a` where user_id is telegram user id of administrator.
+You can add more than one administrator.
+If any _simple_ telegram user sends any message, command etc to the bot then the bot will reply `You cannot access to this bot!`.
+if You add a line `user_id=b` then user will banned and the bot will not respond anything
+
+There are some ways to determine your user_id but You can simply send `/myid` to [@HelloLazarusBot](tg://resolve?domain=hellolazarusbot) chat
+
+# Telegram bot commands
+## /read
+Reads messages from the shell console.
+Sometimes the program does not wait for a response immediately after execution in the console, and in this case, you can read the newly appeared messages by the `/read` command.
+## /sig and /sigXXXX
+It is worked under Unix systems. You can send POSIX signal to terminal. 
+For example, `/sig 9` where 9 is kill sig number or You can send commands `/sigint`, `/sigkill`, `/sigquit` and `/sigterm`.

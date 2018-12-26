@@ -33,7 +33,7 @@ uses
 
 function IsolateShellOutput(const S: String): String;
 begin
-  Result:='```bash'+LineEnding+S+LineEnding+'```';
+  Result:='```sh'+LineEnding+S+LineEnding+'```';
 end;
 
 { TTgShBot }
