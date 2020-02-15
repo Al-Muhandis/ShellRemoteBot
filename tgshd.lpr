@@ -5,6 +5,8 @@ Uses
   CThreads,
 {$ENDIF}{$ENDIF}
   configuration, DaemonApp, tgshelldmn, shellthread, tgshbot
+{ You must use tgsynapsehttpbroker if You want to use HTTP proxy }
+//  ,tgsynapsehttpclientbroker
   ;
 
 begin

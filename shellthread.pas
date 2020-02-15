@@ -241,6 +241,8 @@ begin
     Logger.Error('Please, specify bot token in telegram.ini!');
     Exit;
   end;
+  FBot.HTTPProxyHost:=Cnfg.HTTPProxyHost;
+  FBot.HTTPProxyPort:=Cnfg.HTTPProxyPort;
 //  FBot.LogDebug:=True;
   FBot.OnReceiveMessage:=@BotReceiveMessage;
   { Read output of shell terminal called by user via /read command }

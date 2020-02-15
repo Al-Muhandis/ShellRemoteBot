@@ -19,6 +19,10 @@ type
     function GetAPIEndPoint: String;
     function GetAPITimeout: Integer;
     function GetBotTooken: String;
+    function GetHTTPProxyHost: String;
+    function GetHTTPProxyPort: Word;
+    function GetHTTPProxyPswd: String;
+    function GetHTTPProxyUser: String;
     function GetUsers(UserID: Int64): TUserStatus;
     function GetUserList: TStrings;
   public
@@ -28,6 +32,10 @@ type
     property BotTooken: String read GetBotTooken;
     property Users[UserID: Int64]: TUserStatus read GetUsers;
     property APITimeout: Integer read GetAPITimeout; // longpolling timeout
+    property HTTPProxyHost: String read GetHTTPProxyHost;
+    property HTTPProxyPort: Word read GetHTTPProxyPort;
+    property HTTPProxyUser: String read GetHTTPProxyUser;
+    property HTTPProxyPswd: String read GetHTTPProxyPswd;
   end;
 
 var
@@ -56,6 +64,26 @@ end;
 function TConfig.GetBotTooken: String;
 begin
   Result:=FIni.ReadString('API', 'Token', EmptyStr)
+end;
+
+function TConfig.GetHTTPProxyHost: String;
+begin
+  Result:=FIni.ReadString('Proxy', 'Host', EmptyStr);
+end;
+
+function TConfig.GetHTTPProxyPort: Word;
+begin
+  Result:=FIni.ReadInteger('Proxy', 'Port', 3128);
+end;
+
+function TConfig.GetHTTPProxyPswd: String;
+begin
+  Result:=FIni.ReadString('Proxy', 'Password', EmptyStr);
+end;
+
+function TConfig.GetHTTPProxyUser: String;
+begin
+  Result:=FIni.ReadString('Proxy', 'Username', EmptyStr);
 end;
 
 function TConfig.GetUsers(UserID: Int64): TUserStatus;

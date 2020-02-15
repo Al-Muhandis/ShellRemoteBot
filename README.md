@@ -29,6 +29,12 @@ Timeout=20
 ;;123456789=a
 ;; where 'a' character is means administrator, 'b' - banned
 YOUR_User_ID=a
+[Proxy]
+;; If You can want to use HTTP proxy please use tgsynapsehttpclientbroker
+Host=
+Port=
+Username=
+Password=
 ```
 
 3. Run as a console program or daemon/service.
@@ -48,3 +54,12 @@ Sometimes the program does not wait for a response immediately after execution i
 ### /sig and /sigXXXX
 It is worked under Unix systems. You can send POSIX signal to terminal. 
 For example, `/sig 9` where 9 is kill sig number or You can send commands `/sigint`, `/sigkill`, `/sigquit` and `/sigterm`.
+
+## HTTP proxy
+If you want to add HTTP proxy support, then:
++ add `laz_synapse.lpk` depending on the project
++ add `tgsynapsehttpclientbroker` to the `uses` block
++ set the proxy data in the `INI` file.
+Note: The native FPHTTPClient does not yet have full HTTPS proxy support. So in the case of synapse HTTP client, 
+to make the HTTPs proxy work in Linux (laz_synapse.lpk v40.1), comment out the line in the blcksock.pas source unit of the synapse library.
+`// Port := IntToStr(ResolvePort(Port));`
