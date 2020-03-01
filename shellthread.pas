@@ -161,13 +161,13 @@ begin
   SendSIG(SIGTERM);
 end;
 
+{$ENDIF}
+
 function TShellThread.CommandStart: Boolean;
 begin
   FBot.UpdateProcessed:=True;  // There is no point in further processing
   Result:=CheckIsAdmin and FProc.Running;
 end;
-
-{$ENDIF}
 
 function TShellThread.CheckIsAdmin: Boolean;
 begin
