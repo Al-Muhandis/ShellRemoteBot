@@ -20,9 +20,12 @@ type
     FProc: TProcess;
     FTerminated: Boolean;
     FLPTimeout: Integer;
+    procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);
     procedure BotReceiveMessage({%H-}ASender: TObject; AMessage: TTelegramMessageObj);
     { Read output from shell terminal by command }
     procedure BotReceiveReadCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      {%H-}AMessage: TTelegramMessageObj);
+    procedure BotReceiveScriptsCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       {%H-}AMessage: TTelegramMessageObj);
     {$IFDEF UNIX}
     procedure BotReceiveSIGCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
@@ -55,11 +58,11 @@ type
 implementation
 
 uses
-  configuration{$IFDEF UNIX}, strutils {$ENDIF}
+  configuration{$IFDEF UNIX}, strutils {$ENDIF}, LazFileUtils, FileUtil
   ;
 
-{$IFDEF UNIX}
 const
+{$IFDEF UNIX}
   { POSIX signals }
   {%H-}SIGABRT = 6;
   {%H-}SIGALRM = 14;
@@ -70,6 +73,7 @@ const
   SIGTERM = 15;
   {%H-}SIGTRAP = 5;
 {$ENDIF}
+  _ScriptFileExt='.script';
 
 
 { TShellThread }
@@ -105,11 +109,63 @@ begin
   SendToShellTerminal(InputString);
 end;
 
+procedure TShellThread.BotReceiveCallbackQuery(ASender: TObject; ACallback: TCallbackQueryObj);
+var
+  aScript: TStringList;
+  aFileName: String;
+const
+  aScriptStart='script ';
+begin
+  if not CommandStart then
+    Exit;
+  if ACallback.Data.StartsWith(aScriptStart) then
+  begin
+    aScript:=TStringList.Create;
+    try
+      aFileName:=RightStr(ACallback.Data, Length(ACallback.Data)-Length(aScriptStart));
+      aScript.LoadFromFile(IncludeTrailingPathDelimiter(ExtractFileDir(Cnfg.ScriptsDirectory))+aFileName+_ScriptFileExt);
+      SendToShellTerminal(aScript.Text);
+    finally
+      aScript.Free;
+    end;
+  end;
+end;
+
 procedure TShellThread.BotReceiveReadCommand(ASender: TObject;
   const ACommand: String; AMessage: TTelegramMessageObj);
 begin
   if CommandStart then
     OutputStd('No new messages in the terminal');
+end;
+
+procedure TShellThread.BotReceiveScriptsCommand(ASender: TObject; const ACommand: String; AMessage: TTelegramMessageObj
+  );
+var
+  aScriptFiles: TStringList;
+  aReplyMarkup: TReplyMarkup;
+  f, aFile: String;
+begin
+  if not CommandStart then
+    Exit;
+  aScriptFiles:=TStringList.Create;
+  aReplyMarkup:=TReplyMarkup.Create;
+  try
+    FindAllFiles(aScriptFiles, Cnfg.ScriptsDirectory, '*'+_ScriptFileExt, False);
+    aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
+    for f in aScriptFiles do
+    begin
+      aFile:=LazFileUtils.ExtractFileNameOnly(f);
+      aReplyMarkup.InlineKeyBoard.AddButton(aFile, 'script '+aFile, 3);
+    end;
+    if aScriptFiles.Count>0 then
+      FBot.sendMessage('Select script to run', pmDefault, True, aReplyMarkup)
+    else
+      FBot.sendMessage('Empty script file list! You can add a script file to the directory "'+
+        Cnfg.ScriptsDirectory+'"', pmDefault, True, aReplyMarkup)
+  finally
+    aReplyMarkup.Free;
+    aScriptFiles.Free;
+  end;
 end;
 
 {$IFDEF UNIX}
@@ -246,12 +302,14 @@ begin
 //  FBot.LogDebug:=True;
   FBot.OnReceiveMessage:=@BotReceiveMessage;
   { Read output of shell terminal called by user via /read command }
-  FBot.CommandHandlers['/read']:=@BotReceiveReadCommand;{$IFDEF UNIX}
+  FBot.CommandHandlers['/read']:=@BotReceiveReadCommand;
+  FBot.CommandHandlers['/scripts']:=@BotReceiveScriptsCommand;{$IFDEF UNIX}
   FBot.CommandHandlers['/sig']:=@BotReceiveSigCommand;
   FBot.CommandHandlers['/sigint']:=@BotReceiveSIGINTCommand;
   FBot.CommandHandlers['/sigkill']:=@BotReceiveSIGKILLCommand;
   FBot.CommandHandlers['/sigquit']:=@BotReceiveSIGQUITCommand;
   FBot.CommandHandlers['/sigterm']:=@BotReceiveSIGTERMCommand;
+  FBot.OnReceiveCallbackQuery:=@BotReceiveCallbackQuery;
   {$ENDIF}{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
   FProc:=TProcess.Create(nil);

@@ -23,6 +23,7 @@ type
     function GetHTTPProxyPort: Word;
     function GetHTTPProxyPswd: String;
     function GetHTTPProxyUser: String;
+    function GetScriptsDirectory: String;
     function GetUsers(UserID: Int64): TUserStatus;
     function GetUserList: TStrings;
   public
@@ -36,6 +37,7 @@ type
     property HTTPProxyPort: Word read GetHTTPProxyPort;
     property HTTPProxyUser: String read GetHTTPProxyUser;
     property HTTPProxyPswd: String read GetHTTPProxyPswd;
+    property ScriptsDirectory: String read GetScriptsDirectory;
   end;
 
 var
@@ -44,7 +46,8 @@ var
 implementation
 
 uses
-  tgsendertypes;
+  tgsendertypes
+  ;
 
 var
   CnfDir: String;
@@ -84,6 +87,11 @@ end;
 function TConfig.GetHTTPProxyUser: String;
 begin
   Result:=FIni.ReadString('Proxy', 'Username', EmptyStr);
+end;
+
+function TConfig.GetScriptsDirectory: String;
+begin
+  Result:=FIni.ReadString('Scripts', 'Directory', CnfDir);
 end;
 
 function TConfig.GetUsers(UserID: Int64): TUserStatus;

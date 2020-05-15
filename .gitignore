@@ -16,6 +16,7 @@
 *.o
 *.or
 *.a
+*.bat
 
 tgshd
 

@@ -5,7 +5,8 @@ unit tgshbot;
 interface
 
 uses
-  Classes, SysUtils, tgsendertypes;
+  Classes, SysUtils, tgsendertypes
+  ;
 
 type
 

@@ -35,6 +35,10 @@ Host=
 Port=
 Username=
 Password=
+
+[Scripts]
+;; You can specify directory for script file folder. Default value equal configuration file directory
+Directory=
 ```
 
 3. Run as a console program or daemon/service.
@@ -54,6 +58,9 @@ Sometimes the program does not wait for a response immediately after execution i
 ### /sig and /sigXXXX
 It is worked under Unix systems. You can send POSIX signal to terminal. 
 For example, `/sig 9` where 9 is kill sig number or You can send commands `/sigint`, `/sigkill`, `/sigquit` and `/sigterm`.
+### /scripts
+Calls the menu for executing the prepared script from the list of files. Scripts must located in the same folder where the INI file is located,
+or you can set the folder in the settings in the the `[Scripts]` section / `Directory`
 
 ## HTTP proxy
 If you want to add HTTP proxy support, then:
