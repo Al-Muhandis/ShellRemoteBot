@@ -10,6 +10,10 @@ The program can run as a regular console program or run as a daemon/service.
 
 Tested in Linux but You can try to use in other OS also. Developed with FreePascal. It depends on fp-telegram lib .
 
+## Script files (macros)
+You can specify predefined shell scripts. Create script file with extention `.script` in the same folder where INI file is located. 
+Get the script menu by command `/scripts`. Click the selected script.
+
 ## Installation
 
 1. Create bot https://core.telegram.org/bots/#3-how-do-i-create-a-bot . You must select longpolling method for getting updates.
