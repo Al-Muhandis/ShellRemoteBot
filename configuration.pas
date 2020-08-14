@@ -19,6 +19,7 @@ type
     function GetAPIEndPoint: String;
     function GetAPITimeout: Integer;
     function GetBotTooken: String;
+    function GetDefaultDir: String;
     function GetHTTPProxyHost: String;
     function GetHTTPProxyPort: Word;
     function GetHTTPProxyPswd: String;
@@ -38,6 +39,7 @@ type
     property HTTPProxyUser: String read GetHTTPProxyUser;
     property HTTPProxyPswd: String read GetHTTPProxyPswd;
     property ScriptsDirectory: String read GetScriptsDirectory;
+    property DefaultDir: String read GetDefaultDir;
   end;
 
 var
@@ -67,6 +69,11 @@ end;
 function TConfig.GetBotTooken: String;
 begin
   Result:=FIni.ReadString('API', 'Token', EmptyStr)
+end;
+
+function TConfig.GetDefaultDir: String;
+begin
+  Result:=FIni.ReadString('File', 'DefaultDir', PathDelim);
 end;
 
 function TConfig.GetHTTPProxyHost: String;

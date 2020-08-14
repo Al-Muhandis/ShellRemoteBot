@@ -17,6 +17,7 @@
 *.or
 *.a
 *.bat
+*.new
 
 tgshd
 

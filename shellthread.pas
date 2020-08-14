@@ -15,6 +15,8 @@ type
 
   TShellThread=class(TThread)
   private
+    FIsCallBack: Boolean;
+  private
     FLogger: TEventLog;
     FBot: TTgShBot;
     FProc: TProcess;
@@ -41,14 +43,22 @@ type
     procedure BotReceiveSIGTERMCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       {%H-}AMessage: TTelegramMessageObj);
     {$ENDIF}
+    procedure BotReceiveFileCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      {%H-}AMessage: TTelegramMessageObj); 
+    procedure CallbackDir(const aMessage, aName: String);
+    procedure CallbackFile(const aMessage, aName: String);
+    procedure CallbackScript(const aFileName: String);
     function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
+    procedure DirHandler(const aPath: String);
+    procedure FileHandler(const aPath: String);
     function GetLogger: TEventLog;
     procedure OutputStd(const NoOutput: String = '');
     procedure SendToShellTerminal(const InputString: String);
     {$IFDEF UNIX}procedure SendSIG(SigNumber: Byte);{$ENDIF}
     procedure SetLogger(AValue: TEventLog);
     property Logger: TEventLog read GetLogger write SetLogger;
+    property IsCallback: Boolean read FIsCallBack;
   public
     constructor Create;
     destructor Destroy; override;
@@ -58,7 +68,7 @@ type
 implementation
 
 uses
-  configuration{$IFDEF UNIX}, strutils {$ENDIF}, LazFileUtils, FileUtil
+  configuration, strutils, LazFileUtils, FileUtil, tgutils
   ;
 
 const
@@ -74,6 +84,12 @@ const
   {%H-}SIGTRAP = 5;
 {$ENDIF}
   _ScriptFileExt='.script';
+
+  emj_FileFolder='📁';
+
+  dt_script='script';
+  dt_dir='dir';
+  dt_file='file';
 
 
 { TShellThread }
@@ -110,24 +126,14 @@ begin
 end;
 
 procedure TShellThread.BotReceiveCallbackQuery(ASender: TObject; ACallback: TCallbackQueryObj);
-var
-  aScript: TStringList;
-  aFileName: String;
-const
-  aScriptStart='script ';
 begin
   if not CommandStart then
     Exit;
-  if ACallback.Data.StartsWith(aScriptStart) then
-  begin
-    aScript:=TStringList.Create;
-    try
-      aFileName:=RightStr(ACallback.Data, Length(ACallback.Data)-Length(aScriptStart));
-      aScript.LoadFromFile(IncludeTrailingPathDelimiter(ExtractFileDir(Cnfg.ScriptsDirectory))+aFileName+_ScriptFileExt);
-      SendToShellTerminal(aScript.Text);
-    finally
-      aScript.Free;
-    end;
+  FIsCallBack:=True;
+  case ExtractWord(1, ACallback.Data, [' ']) of
+    dt_script: CallbackScript(ExtractWord(2, ACallback.Data, [' ']));
+    dt_dir: CallbackDir(ACallback.Message.Text, ExtractWord(2, ACallback.Data, [' ']));
+    dt_file: CallbackFile(ACallback.Message.Text, ExtractWord(2, ACallback.Data, [' ']));
   end;
 end;
 
@@ -155,7 +161,7 @@ begin
     for f in aScriptFiles do
     begin
       aFile:=LazFileUtils.ExtractFileNameOnly(f);
-      aReplyMarkup.InlineKeyBoard.AddButton(aFile, 'script '+aFile, 3);
+      aReplyMarkup.InlineKeyBoard.AddButton(aFile, dt_script+' '+aFile, 3);
     end;
     if aScriptFiles.Count>0 then
       FBot.sendMessage('Select script to run', pmDefault, True, aReplyMarkup)
@@ -219,6 +225,67 @@ end;
 
 {$ENDIF}
 
+procedure TShellThread.BotReceiveFileCommand(ASender: TObject;
+  const ACommand: String; AMessage: TTelegramMessageObj);
+var
+  aPath: String;
+begin
+  if not CommandStart then
+    Exit;
+  aPath:=ExtractWord(2, AMessage.Text, [' ']);
+  if aPath=EmptyStr then
+    aPath:=Cnfg.DefaultDir;
+  if aPath=EmptyStr then
+    aPath:=PathDelim;
+  DirHandler(aPath);
+end;
+
+procedure TShellThread.CallbackDir(const aMessage, aName: String);
+var
+  aStart, aFinish: Integer;
+  aPath: String;
+begin
+  aStart:=Pos(emj_FileFolder+' ', aMessage);
+  if aStart=0 then Exit;
+  Inc(aStart, Length(emj_FileFolder)+1);
+  aFinish:=PosEx(' '+emj_FileFolder, aMessage, aStart);
+  if aFinish=0 then Exit;
+  aPath:=IncludeTrailingPathDelimiter(Copy(aMessage, aStart, aFinish-aStart));
+  if aName='..' then
+    aPath:=ExtractFileDir(ExcludeTrailingPathDelimiter(aPath))
+  else
+    aPath:=aPath+aName;
+  DirHandler(IncludeTrailingPathDelimiter(aPath));
+end;
+
+procedure TShellThread.CallbackFile(const aMessage, aName: String);
+var
+  aStart, aFinish: Integer;
+  aPath: String;
+begin
+  aStart:=Pos(emj_FileFolder+' ', aMessage);
+  if aStart=0 then Exit;
+  Inc(aStart, Length(emj_FileFolder)+1);
+  aFinish:=PosEx(' '+emj_FileFolder, aMessage, aStart);
+  if aFinish=0 then Exit;
+  aPath:=IncludeTrailingPathDelimiter(Copy(aMessage, aStart, aFinish-aStart));
+  aPath:=aPath+aName;
+  FileHandler(aPath);
+end;
+
+procedure TShellThread.CallbackScript(const aFileName: String);
+var
+  aScript: TStringList;
+begin
+  aScript:=TStringList.Create;
+  try
+    aScript.LoadFromFile(IncludeTrailingPathDelimiter(ExtractFileDir(Cnfg.ScriptsDirectory))+aFileName+_ScriptFileExt);
+    SendToShellTerminal(aScript.Text);
+  finally
+    aScript.Free;
+  end;
+end;
+
 function TShellThread.CommandStart: Boolean;
 begin
   FBot.UpdateProcessed:=True;  // There is no point in further processing
@@ -232,6 +299,46 @@ begin
     FBot.sendMessage('You cannot access to this bot!')
   else
     Result:=True;
+end;
+
+procedure TShellThread.DirHandler(const aPath: String);
+var
+  s, aName: String;
+  aList: TStringList;
+  aReplyMarkup: TReplyMarkup;
+begin
+  aReplyMarkup:=TReplyMarkup.Create;
+  aList:=TStringList.Create;
+  try
+    aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
+    FindAllDirectories(aList, aPath, False);
+    if aPath<>PathDelim then
+      aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+'..', dt_dir+' '+'..');
+    for s in aList do
+    begin
+      aName:=ExtractFileName(s);
+      aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+aName, dt_dir+' '+aName, 2);
+    end;
+    aList.Clear;
+    FindAllFiles(aList, aPath, EmptyStr, False);
+    for s in aList do
+    begin
+      aName:=ExtractFileName(s);
+      aReplyMarkup.InlineKeyBoard.AddButton(aName, dt_file+' '+aName, 2);
+    end;
+    if IsCallback then
+      FBot.editMessageText(emj_FileFolder+' '+mdCode+IncludeTrailingPathDelimiter(aPath)+mdCode+' '+emj_FileFolder, pmMarkdown, True, aReplyMarkup)
+    else
+      FBot.sendMessage(emj_FileFolder+' '+mdCode+IncludeTrailingPathDelimiter(aPath)+mdCode+' '+emj_FileFolder, pmMarkdown, True, aReplyMarkup);
+  finally
+    aReplyMarkup.Free;
+    aList.Free;
+  end;
+end;
+
+procedure TShellThread.FileHandler(const aPath: String);
+begin
+  FBot.sendDocumentByFileName(FBot.CurrentChatId, aPath, ExtractFileDir(aPath));
 end;
 
 procedure TShellThread.OutputStd(const NoOutput: String);
@@ -309,6 +416,7 @@ begin
   FBot.CommandHandlers['/sigkill']:=@BotReceiveSIGKILLCommand;
   FBot.CommandHandlers['/sigquit']:=@BotReceiveSIGQUITCommand;
   FBot.CommandHandlers['/sigterm']:=@BotReceiveSIGTERMCommand;
+  FBot.CommandHandlers['/'+dt_dir]:=@BotReceiveFileCommand;
   FBot.OnReceiveCallbackQuery:=@BotReceiveCallbackQuery;
   {$ENDIF}{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
@@ -324,16 +432,22 @@ destructor TShellThread.Destroy;
 begin
   FreeAndNil(FProc);
   FreeAndNil(FBot);
+  FreeAndNil(FLogger);
   inherited Destroy;
 end;
 
 procedure TShellThread.Execute;
 begin
-  OutputStd;
-  while not Terminated do
-  begin
-    FBot.getUpdatesEx(0, FLPTimeout);
+  try
     OutputStd;
+    while not Terminated do
+    begin
+      FBot.getUpdatesEx(0, FLPTimeout);
+      OutputStd;
+    end;
+  except
+    on E: Exception do
+      Logger.Error(E.ClassName+': '+E.Message);
   end;
 end;
 
