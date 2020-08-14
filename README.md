@@ -2,7 +2,7 @@
 
 ## Description of the ShellRemoteBot
 
-Helps you work with your server (or remote computer) via telegram bot emulating terminal operations (sh for Linux and cmd for Windows).
+Helps you work with your server (or remote computer) via telegram bot emulating terminal operations (sh for Linux and cmd for Windows) and a file manager functionality.
 
 It is possible to work in the terminal from under any user in OS. You can configure access to several telegram users or only for You.
 
@@ -13,6 +13,11 @@ Tested in Linux but You can try to use in other OS also. Developed with FreePasc
 ## Script files (macros)
 You can specify predefined shell scripts. Create script file with extention `.script` in the same folder where INI file is located. 
 Get the script menu by command `/scripts`. Click the selected script.
+
+## File manager
+You can call the file manager by `/dir` command then select directory inline button (select another folder) or file inline button (select the file to download).
+
+You can set the default value in the configuration file (`DefaultDir` in `[File]` section)
 
 ## Installation
 
