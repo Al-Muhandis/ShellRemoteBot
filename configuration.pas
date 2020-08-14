@@ -75,7 +75,7 @@ end;
 
 function TConfig.GetDefaultDir: String;
 begin
-  Result:=FIni.ReadString('File', 'DefaultDir', GetCurrentDir);
+  Result:=FIni.ReadString('File', 'DefaultDir', PathDelim);
 end;
 
 function TConfig.GetHTTPProxyHost: String;

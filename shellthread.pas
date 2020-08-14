@@ -126,14 +126,17 @@ begin
 end;
 
 procedure TShellThread.BotReceiveCallbackQuery(ASender: TObject; ACallback: TCallbackQueryObj);
+var
+  aName: String;
 begin
   if not CommandStart then
     Exit;
   FIsCallBack:=True;
+  aName:=RightStr(ACallback.Data, Length(ACallback.Data)-Length(dt_dir)-1);
   case ExtractWord(1, ACallback.Data, [' ']) of
-    dt_script: CallbackScript(ExtractWord(2, ACallback.Data, [' ']));
-    dt_dir: CallbackDir(ACallback.Message.Text, ExtractWord(2, ACallback.Data, [' ']));
-    dt_file: CallbackFile(ACallback.Message.Text, ExtractWord(2, ACallback.Data, [' ']));
+    dt_script: CallbackScript(aName);
+    dt_dir: CallbackDir(ACallback.Message.Text, aName);
+    dt_file: CallbackFile(ACallback.Message.Text, aName);
   end;
 end;
 

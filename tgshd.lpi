@@ -61,7 +61,7 @@
           <Version Value="11"/>
           <PathDelim Value="\"/>
           <Target>
-            <Filename Value="tgshd"/>
+            <Filename Value="$(TargetCPU)-$(TargetOS)\tgshd"/>
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir)"/>
@@ -89,7 +89,7 @@
           <Version Value="11"/>
           <PathDelim Value="\"/>
           <Target>
-            <Filename Value="tgshd"/>
+            <Filename Value="$(TargetCPU)-$(TargetOS)\tgshd"/>
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir)"/>
