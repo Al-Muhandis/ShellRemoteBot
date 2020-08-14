@@ -51,7 +51,7 @@ Directory=
 
 [File]
 ;; You can specify default initial directory path for file manager called by /dir command
-Dir=
+DefaultDir=
 ```
 
 3. Run as a console program or daemon/service.
