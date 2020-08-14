@@ -61,7 +61,7 @@ function TTgShellDaemon.Stop: Boolean;
 begin
   Result := inherited Stop;
   FThread.Terminate;
-  FThread.Free;
+  //FThread.Free;
 end;
 
 function TTgShellDaemon.Install: Boolean;

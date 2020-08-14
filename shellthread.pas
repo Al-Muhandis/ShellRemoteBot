@@ -5,7 +5,7 @@ unit shellthread;
 interface
 
 uses
-  Classes, SysUtils, tgtypes, tgsendertypes, process, eventlog, tgshbot
+  Classes, SysUtils, tgtypes, tgsendertypes, process, eventlog, tgshbot, UTF8Process
   {$IFDEF MSWINDOWS}, Windows{$ENDIF}
   ;
 
@@ -16,7 +16,6 @@ type
   TShellThread=class(TThread)
   private
     FIsCallBack: Boolean;
-  private
     FLogger: TEventLog;
     FBot: TTgShBot;
     FProc: TProcess;
@@ -68,7 +67,7 @@ type
 implementation
 
 uses
-  configuration, strutils, LazFileUtils, FileUtil, tgutils
+  configuration, strutils, LazFileUtils, FileUtil, tgutils, LazUTF8
   ;
 
 const
@@ -107,6 +106,7 @@ begin
   begin
     FLogger:=TEventLog.Create(nil);
     FLogger.Identification:='Shell thread';
+    FLogger.LogType:=ltFile;
   end;
   Result:=FLogger;
 end;
@@ -236,7 +236,7 @@ begin
   if aPath=EmptyStr then
     aPath:=Cnfg.DefaultDir;
   if aPath=EmptyStr then
-    aPath:=PathDelim;
+    aPath:={$IFDEF MSWINDOWS} GetCurrentDir {$ENDIF} {$IFDEF UNIX} PathDelim {$ENDIF};
   DirHandler(aPath);
 end;
 
@@ -363,8 +363,8 @@ begin
   if (OutputString=EmptyStr) and (NoOutput<>EmptyStr) then
     FBot.sendMessageSafe(NoOutput)
   else
-    if not FBot.sendMessageCode(OutputString) then
-      Logger.Error('['+ClassName+'.OutpuStd] Cant send message to bot!');
+    if not FBot.sendMessageCode({$IFDEF MSWINDOWS}WinCPToUTF8(OutputString){$ENDIF}{$IFDEF UNIX}OutputString{$ENDIF}) then
+      Logger.Error('['+ClassName+'.OutputStd] Can''t send message to bot!');
   // read stderr and write to our stderr ... crashing :((
   { while FProc.Stderr.NumBytesAvailable > 0 do
   begin
@@ -395,7 +395,7 @@ end;
 constructor TShellThread.Create;
 begin
   inherited Create(True);
-  FreeOnTerminate:=False;
+  FreeOnTerminate:=True;
   TelegramAPI_URL:=Cnfg.APIEndPoint; // For Russian specific case
   FBot:=TTgShBot.Create(Cnfg.BotTooken);
   FBot.Logger:=Logger;
@@ -415,12 +415,12 @@ begin
   FBot.CommandHandlers['/sigint']:=@BotReceiveSIGINTCommand;
   FBot.CommandHandlers['/sigkill']:=@BotReceiveSIGKILLCommand;
   FBot.CommandHandlers['/sigquit']:=@BotReceiveSIGQUITCommand;
-  FBot.CommandHandlers['/sigterm']:=@BotReceiveSIGTERMCommand;
+  FBot.CommandHandlers['/sigterm']:=@BotReceiveSIGTERMCommand;{$ENDIF}
   FBot.CommandHandlers['/'+dt_dir]:=@BotReceiveFileCommand;
-  FBot.OnReceiveCallbackQuery:=@BotReceiveCallbackQuery;
-  {$ENDIF}{$IFDEF MSWINDOWS}
+  FBot.OnReceiveCallbackQuery:=@BotReceiveCallbackQuery;{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
-  FProc:=TProcess.Create(nil);
+  FBot.ServiceUser:=Cnfg.ServiceUser;
+  FProc:=TProcessUTF8.Create(nil);
   FProc.Options := [poUsePipes, poStderrToOutPut, poNoConsole];
   FProc.Executable:={$IFDEF MSWINDOWS}'cmd'{$ELSE}'sh'{$ENDIF};
   FProc.Execute;

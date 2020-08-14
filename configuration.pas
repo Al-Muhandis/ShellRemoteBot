@@ -25,11 +25,13 @@ type
     function GetHTTPProxyPswd: String;
     function GetHTTPProxyUser: String;
     function GetScriptsDirectory: String;
+    function GetServiceUser: Int64;
     function GetUsers(UserID: Int64): TUserStatus;
     function GetUserList: TStrings;
   public
     constructor Create(const AConfFile: String);
     destructor Destroy; override;
+    property ServiceUser: Int64 read GetServiceUser;
     property APIEndPoint: String read GetAPIEndPoint;
     property BotTooken: String read GetBotTooken;
     property Users[UserID: Int64]: TUserStatus read GetUsers;
@@ -73,7 +75,7 @@ end;
 
 function TConfig.GetDefaultDir: String;
 begin
-  Result:=FIni.ReadString('File', 'DefaultDir', PathDelim);
+  Result:=FIni.ReadString('File', 'DefaultDir', GetCurrentDir);
 end;
 
 function TConfig.GetHTTPProxyHost: String;
@@ -99,6 +101,11 @@ end;
 function TConfig.GetScriptsDirectory: String;
 begin
   Result:=FIni.ReadString('Scripts', 'Directory', CnfDir);
+end;
+
+function TConfig.GetServiceUser: Int64;
+begin
+  Result:=FIni.ReadInt64('Service', 'User', 0);
 end;
 
 function TConfig.GetUsers(UserID: Int64): TUserStatus;

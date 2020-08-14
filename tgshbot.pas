@@ -13,6 +13,8 @@ type
   { TTgShBot }
 
   TTgShBot = class (TTelegramSender)
+  private
+    FServiceUser: Int64;
   protected
     function IsSimpleUser(ChatID: Int64): Boolean; override;
     function IsBanned(ChatID: Int64): Boolean; override;
@@ -22,6 +24,7 @@ type
     function sendMessageSafe(const AMessage: String; ParseMode: TParseMode = pmDefault;
       DisableWebPagePreview: Boolean=False; ReplyMarkup: TReplyMarkup = nil;
       ReplyToMessageID: Integer = 0): Boolean; overload;
+    property ServiceUser: Int64 read FServiceUser write FServiceUser;
   end;
 
 function IsolateShellOutput(const S: String): String;
@@ -83,8 +86,12 @@ function TTgShBot.sendMessageSafe(const AMessage: String;
   ReplyMarkup: TReplyMarkup; ReplyToMessageID: Integer): Boolean;
 var
   SleepTime: Integer;
+  aChatID: Int64;
 begin
-  Result:=sendMessage(AMessage, ParseMode, DisableWebPagePreview, ReplyMarkup, ReplyToMessageID);
+  aChatID:=CurrentChatId;
+  if CurrentChatId=0 then
+    aChatID:=FServiceUser;
+  Result:=sendMessage(aChatID, AMessage, ParseMode, DisableWebPagePreview, ReplyMarkup, ReplyToMessageID);
   if not Result then
     if LastErrorCode=429 then       // Too many requests
     begin
