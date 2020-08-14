@@ -43,6 +43,10 @@ Password=
 [Scripts]
 ;; You can specify directory for script file folder. Default value equal configuration file directory
 Directory=
+
+[File]
+;; You can specify default initial directory path for file manager called by /dir command
+Dir=
 ```
 
 3. Run as a console program or daemon/service.
@@ -65,6 +69,8 @@ For example, `/sig 9` where 9 is kill sig number or You can send commands `/sigi
 ### /scripts
 Calls the menu for executing the prepared script from the list of files. Scripts must located in the same folder where the INI file is located,
 or you can set the folder in the settings in the the `[Scripts]` section / `Directory`
+### /dir
+Calls the file Manager. You can set the default value in the configuration file
 
 ## HTTP proxy
 If you want to add HTTP proxy support, then:
