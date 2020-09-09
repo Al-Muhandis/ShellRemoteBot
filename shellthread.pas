@@ -131,6 +131,7 @@ var
 begin
   if not CommandStart then
     Exit;
+  FBot.answerCallbackQuery(ACallback.ID);
   FIsCallBack:=True;
   aName:=RightStr(ACallback.Data, Length(ACallback.Data)-Length(dt_dir)-1);
   case ExtractWord(1, ACallback.Data, [' ']) of
