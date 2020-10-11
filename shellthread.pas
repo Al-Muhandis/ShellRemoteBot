@@ -446,8 +446,13 @@ begin
     OutputStd;
     while not Terminated do
     begin
-      FBot.getUpdatesEx(0, FLPTimeout);
-      OutputStd;
+      try
+        FBot.getUpdatesEx(0, FLPTimeout);
+        OutputStd;
+      except
+        on E: Exception do
+          Logger.Error(E.ClassName+': '+E.Message);
+      end;
     end;
   except
     on E: Exception do

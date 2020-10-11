@@ -9,6 +9,8 @@ Uses
 //  ,tgsynapsehttpclientbroker
   ;
 
+{$R *.res}
+
 begin
   Application.Title:='Telegram shell daemon';
   Application.Initialize;
