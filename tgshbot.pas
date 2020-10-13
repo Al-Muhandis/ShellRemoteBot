@@ -16,7 +16,7 @@ type
   private
     FServiceUser: Int64;
   protected
-    function IsSimpleUser(ChatID: Int64): Boolean; override;
+    function IsAdminUser(ChatID: Int64): Boolean; override;
     function IsBanned(ChatID: Int64): Boolean; override;
   public
   {   Independently split too large messages and waits in case of error 429 }
@@ -42,9 +42,9 @@ end;
 
 { TTgShBot }
 
-function TTgShBot.IsSimpleUser(ChatID: Int64): Boolean;
+function TTgShBot.IsAdminUser(ChatID: Int64): Boolean;
 begin
-  Result:=Cnfg.Users[ChatID]=usSimple;
+  Result:=Cnfg.Users[ChatID]=usAdmin;
 end;
 
 function TTgShBot.IsBanned(ChatID: Int64): Boolean;
