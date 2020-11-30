@@ -18,7 +18,7 @@ type
     FUsers: TStringList;
     function GetAPIEndPoint: String;
     function GetAPITimeout: Integer;
-    function GetBotTooken: String;
+    function GetBotToken: String;
     function GetDefaultDir: String;
     function GetHTTPProxyHost: String;
     function GetHTTPProxyPort: Word;
@@ -33,7 +33,7 @@ type
     destructor Destroy; override;
     property ServiceUser: Int64 read GetServiceUser;
     property APIEndPoint: String read GetAPIEndPoint;
-    property BotTooken: String read GetBotTooken;
+    property BotToken: String read GetBotToken;
     property Users[UserID: Int64]: TUserStatus read GetUsers;
     property APITimeout: Integer read GetAPITimeout; // longpolling timeout
     property HTTPProxyHost: String read GetHTTPProxyHost;
@@ -68,7 +68,7 @@ begin
   Result:=FIni.ReadInteger('API', 'Timeout', 20);   // 20 sec for longpolling request ??
 end;
 
-function TConfig.GetBotTooken: String;
+function TConfig.GetBotToken: String;
 begin
   Result:=FIni.ReadString('API', 'Token', EmptyStr)
 end;

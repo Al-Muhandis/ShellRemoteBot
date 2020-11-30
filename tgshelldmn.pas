@@ -22,7 +22,7 @@ uses
   ServiceManager,
 {$ENDIF}
   DaemonApp, Classes, SysUtils,
-  tgsendertypes, shellthread
+  tgsendertypes, shellthread, shotsthread
   ;
 
 type
@@ -32,6 +32,7 @@ type
   TTgShellDaemon = class(TCustomDaemon)
   private
     FThread: TThread;
+    FShotThread: TShotThread;
   public
     function Install: Boolean; override;
     function Uninstall: Boolean; override;
@@ -55,12 +56,16 @@ begin
   Result := inherited Start;
   FThread := TShellThread.Create;
   FThread.Start;
+  FShotThread:=TShotThread.Create;
+  FShotThread.Start;
 end;
 
 function TTgShellDaemon.Stop: Boolean;
 begin
   Result := inherited Stop;
   FThread.Terminate;
+  FShotThread.TerminateThread;
+
   //FThread.Free;
 end;
 

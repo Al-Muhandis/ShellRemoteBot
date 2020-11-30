@@ -4,7 +4,7 @@ Uses
 {$IFDEF UNIX}{$IFDEF UseCThreads}
   CThreads,
 {$ENDIF}{$ENDIF}
-  configuration, DaemonApp, tgshelldmn, shellthread, tgshbot
+  configuration, DaemonApp, tgshelldmn, shellthread, tgshbot, shotsthread, screenshot
 { You must use tgsynapsehttpbroker if You want to use HTTP proxy }
 //  ,tgsynapsehttpclientbroker
   ;
