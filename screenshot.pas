@@ -41,7 +41,6 @@ begin
 end;
 {$ENDIF}
 
-
 procedure CreateScreenshot(aStream: TStream);
 var
   MyBitmap: TBitmap;
@@ -50,7 +49,6 @@ begin
   ScreenDC := GetDC(0);
   MyBitmap := TBitmap.Create;
   try
-    CreateScreenshotBitmap(MyBitmap);
     MyBitmap.LoadFromDevice(ScreenDC);
     MyBitmap.SaveToStream(aStream);
   finally

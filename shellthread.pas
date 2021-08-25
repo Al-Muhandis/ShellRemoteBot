@@ -43,7 +43,9 @@ type
       {%H-}AMessage: TTelegramMessageObj);
     {$ENDIF}
     procedure BotReceiveFileCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
-      {%H-}AMessage: TTelegramMessageObj); 
+      {%H-}AMessage: TTelegramMessageObj);
+    procedure BotReceiveScreenShotCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      {%H-}AMessage: TTelegramMessageObj);
     procedure CallbackDir(const aMessage, aName: String);
     procedure CallbackFile(const aMessage, aName: String);
     procedure CallbackScript(const aFileName: String);
@@ -67,7 +69,7 @@ type
 implementation
 
 uses
-  configuration, strutils, LazFileUtils, FileUtil, tgutils, LazUTF8
+  configuration, strutils, LazFileUtils, FileUtil, tgutils, LazUTF8, screenshot
   ;
 
 const
@@ -245,6 +247,22 @@ begin
   DirHandler(aPath);
 end;
 
+procedure TShellThread.BotReceiveScreenShotCommand(ASender: TObject; const ACommand: String;
+  AMessage: TTelegramMessageObj);
+var
+  aStream: TMemoryStream;
+begin
+  if not CommandStart then
+    Exit;
+  aStream:=TMemoryStream.Create;
+  try
+    CreateScreenshot(aStream);
+    FBot.sendPhotoStream(Cnfg.ServiceUser, 'Screenshot', aStream, 'Screenshot caption');
+  finally
+    aStream.Free;
+  end;
+end;
+
 procedure TShellThread.CallbackDir(const aMessage, aName: String);
 var
   aStart, aFinish: Integer;
@@ -402,7 +420,7 @@ begin
   inherited Create(True);
   FreeOnTerminate:=True;
   TelegramAPI_URL:=Cnfg.APIEndPoint; // For Russian specific case
-  FBot:=TTgShBot.Create(Cnfg.BotTooken);
+  FBot:=TTgShBot.Create(Cnfg.BotToken);
   FBot.Logger:=Logger;
   if FBot.Token=EmptyStr then
   begin
@@ -422,6 +440,7 @@ begin
   FBot.CommandHandlers['/sigquit']:=@BotReceiveSIGQUITCommand;
   FBot.CommandHandlers['/sigterm']:=@BotReceiveSIGTERMCommand;{$ENDIF}
   FBot.CommandHandlers['/'+dt_dir]:=@BotReceiveFileCommand;
+  FBot.CommandHandlers['/screen']:=@BotReceiveScreenshotCommand;
   FBot.OnReceiveCallbackQuery:=@BotReceiveCallbackQuery;{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
   FBot.ServiceUser:=Cnfg.ServiceUser;

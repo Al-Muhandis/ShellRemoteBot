@@ -59,7 +59,7 @@ constructor TShotThread.Create;
 begin
   inherited Create(True);
   FreeOnTerminate:=True;
-  FBot:=TTelegramSender.Create(Cnfg.BotTooken);
+  FBot:=TTelegramSender.Create(Cnfg.BotToken);
   FBot.Logger:=Logger;
   if FBot.Token=EmptyStr then
   begin
