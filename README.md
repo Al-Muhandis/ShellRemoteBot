@@ -21,7 +21,7 @@ You can set the default value in the configuration file (`DefaultDir` in `[File]
 
 ## Installation
 
-1. Create bot https://core.telegram.org/bots/#3-how-do-i-create-a-bot . You must select longpolling method for getting updates.
+1. Create bot https://core.telegram.org/bots/#3-how-do-i-create-a-bot . You must select (keep default) longpolling method for getting updates.
 2. Create config ini file `tgshd.ini` in app folder:
 
 ``` INI
@@ -55,6 +55,21 @@ DefaultDir=
 ```
 
 3. Run as a console program or daemon/service.
+
+### DEB package
+You can easily install using a .ded file on Debian/Ubuntu/etc. 
+Download deb package from releas section https://github.com/Al-Muhandis/ShellRemoteBot/releases
+Then install for example:
+``` BASH
+sudo dpkg --install tgsh_1.2-1_amd64.deb
+# After package installation set up at least token and admin user id in the INI file located at /etc/tgshd/tgshd.ini
+# for example with Nano editor
+sudo nano /etc/tgshd/tgshd.ini
+# Now You can run /usr/bin/tgshd -r
+# Or is better enable and run as a daemon (service file for systemd inlcluded in the DEB package)
+systemctl enable tgshd
+systemctl start tgshd
+```
 
 ## Users rights and telegram user ID
 You can define user access in configuration file `tgshd.ini` by adding string like `user_id=a` where user_id is telegram user id of administrator.
