@@ -57,8 +57,8 @@ DefaultDir=
 3. Run as a console program or daemon/service.
 
 ### DEB package
-You can easily install using a .ded file on Debian/Ubuntu/etc. 
-Download deb package from releas section https://github.com/Al-Muhandis/ShellRemoteBot/releases
+You can easily install using a .deb file on Debian/Ubuntu/etc. 
+Download deb package from release section https://github.com/Al-Muhandis/ShellRemoteBot/releases
 Then install for example:
 ``` BASH
 sudo dpkg --install tgsh_1.2-1_amd64.deb
