@@ -147,9 +147,11 @@ begin
   inherited Destroy;
 end;
 
-initialization
+initialization{$ifdef portable}
   CnfDir:=IncludeTrailingPathDelimiter(ExtractFileDir(ParamStr(0)));
-  Cnfg:=TConfig.Create(CnfDir+ChangeFileExt(ExtractFileName(ParamStr(0)), '.ini'));
+  Cnfg:=TConfig.Create(CnfDir+ChangeFileExt(ExtractFileName(ParamStr(0)), '.ini'));{$else}
+  CnfDir:=GetAppConfigDir(True);
+  Cnfg:=TConfig.Create(CnfDir+ChangeFileExt(ExtractFileName(ParamStr(0)), '.ini'));{$endif}
 
 finalization
   FreeAndNil(Cnfg);
