@@ -22,7 +22,8 @@ type
     FTerminated: Boolean;
     FLPTimeout: Integer;
     procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);
-    procedure BotReceiveMessage({%H-}ASender: TObject; AMessage: TTelegramMessageObj);
+    procedure BotReceiveMessage({%H-}ASender: TObject; AMessage: TTelegramMessageObj);     
+    function BotReceiveDocument(aDocument: TTelegramDocument; const aPath: String): Boolean;
     { Read output from shell terminal by command }
     procedure BotReceiveReadCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       {%H-}AMessage: TTelegramMessageObj);
@@ -45,15 +46,17 @@ type
     procedure BotReceiveFileCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       {%H-}AMessage: TTelegramMessageObj); 
     procedure CallbackDir(const aMessage, aName: String);
-    procedure CallbackFile(const aMessage, aName: String);
+    procedure CallbackFile(const aMessage, aName: String); 
+    procedure CallbackInput(const aMessage: String);
     procedure CallbackScript(const aFileName: String);
     function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
     procedure DirHandler(const aPath: String);
     procedure FileHandler(const aPath: String);
+    class function FormatPath(const aPath: String): String;
     function GetLogger: TEventLog;
     procedure OutputStd(const NoOutput: String = '');
-    function ParsePath(const aMessage: String): String;
+    class function ParsePath(const aMessage: String): String;
     procedure SendToShellTerminal(const InputString: String);
     {$IFDEF UNIX}procedure SendSIG(SigNumber: Byte);{$ENDIF}
     procedure SetLogger(AValue: TEventLog);
@@ -68,7 +71,7 @@ type
 implementation
 
 uses
-  configuration, strutils, LazFileUtils, FileUtil, tgutils, LazUTF8
+  configuration, strutils, LazFileUtils, FileUtil, tgutils, LazUTF8, fphttpclient
   ;
 
 const
@@ -89,7 +92,8 @@ const
 
   dt_script='script';
   dt_dir='dir';
-  dt_file='file';
+  dt_file='file'; 
+  dt_input='input';
 
 
 { TShellThread }
@@ -108,6 +112,10 @@ begin
     FLogger:=TEventLog.Create(nil);
     FLogger.Identification:='Shell thread';
     FLogger.LogType:=ltFile;
+    FLogger.FileName:='/var/log/'+'tgshd.log';
+    FLogger.Active:=True;
+    FLogger.AppendContent:=True;
+    //FLogger.LogType:=ltFile;
   end;
   Result:=FLogger;
 end;
@@ -115,15 +123,48 @@ end;
 procedure TShellThread.BotReceiveMessage(ASender: TObject;
   AMessage: TTelegramMessageObj);
 var
-  InputString: String;
+  InputString, aPath: String;
 begin
   if not CommandStart then
     Exit;
+  if Assigned(AMessage.ReplyToMessage) then
+  begin
+    aPath:=ParsePath(AMessage.ReplyToMessage.Text);
+    if aPath.IsEmpty then
+      Exit;
+    if Assigned(AMessage.Document) then
+      BotReceiveDocument(AMessage.Document, aPath);
+    Exit;
+  end;
   InputString:=AMessage.Text;
   if InputString=EmptyStr then
     Exit;
   InputString+=LineEnding;
   SendToShellTerminal(InputString);
+end;
+
+function TShellThread.BotReceiveDocument(aDocument: TTelegramDocument; const aPath: String): Boolean;
+var
+  aFileID: String;
+begin
+  aFileID:=aDocument.FileID;
+  if not FBot.getFile(aFileID) then
+  begin
+    Logger.Error('Failed to get file by FileID "'+AFileID+'"');
+    Exit(False);
+  end;
+  if not Assigned(FBot.FileObj) then
+  begin
+    Logger.Error('FileObject not Assigned! FileID: "'+AFileID+'"');
+    Exit(False);
+  end; 
+  try
+    TFPHTTPClient.SimpleGet(FBot.FileObj.DownloadLink(FBot.Token), aPath+aDocument.FileName);
+  except
+    on E:Exception do
+      Logger.Error(E.ClassName+': '+E.Message);
+  end;
+  Result:=True;
 end;
 
 procedure TShellThread.BotReceiveCallbackQuery(ASender: TObject; ACallback: TCallbackQueryObj);
@@ -138,8 +179,9 @@ begin
   aName:=RightStr(ACallback.Data, Length(ACallback.Data)-Length(aCmd)-1);
   case aCmd of
     dt_script: CallbackScript(aName);
-    dt_dir: CallbackDir(ACallback.Message.Text, aName);
-    dt_file: CallbackFile(ACallback.Message.Text, aName);
+    dt_dir:    CallbackDir(ACallback.Message.Text, aName);
+    dt_file:   CallbackFile(ACallback.Message.Text, aName);
+    dt_input:  CallbackInput(ACallback.Message.Text);
   end;
 end;
 
@@ -262,9 +304,21 @@ begin
   FileHandler(ParsePath(aMessage)+aName);
 end;
 
-procedure TShellThread.CallbackInput(const aMessage: TTelegramMessageObj);
+procedure TShellThread.CallbackInput(const aMessage: String);
+var
+  aReplyMarkup: TReplyMarkup;
+  aPath, aMsg: String;
 begin
-
+  aPath:=ParsePath(aMessage);
+  aMsg:=FormatPath(aPath)+LineEnding;
+  aMsg+='Upload file to the folder '+aPath;
+  aReplyMarkup:=TReplyMarkup.Create;
+  try
+    aReplyMarkup.ForceReply:=True;
+    FBot.sendMessage(aMsg, pmMarkdown, True, aReplyMarkup);
+  finally
+    aReplyMarkup.Free;
+  end;
 end;
 
 procedure TShellThread.CallbackScript(const aFileName: String);
@@ -320,10 +374,11 @@ begin
       aName:=ExtractFileName(s);
       aReplyMarkup.InlineKeyBoard.AddButton(aName, dt_file+' '+aName, 2);
     end;
+    aReplyMarkup.InlineKeyBoard.Add.AddButton('Upload...', dt_input);
     if IsCallback then
-      FBot.editMessageText(emj_FileFolder+' '+mdCode+IncludeTrailingPathDelimiter(aPath)+mdCode+' '+emj_FileFolder, pmMarkdown, True, aReplyMarkup)
+      FBot.editMessageText(FormatPath(aPath), pmMarkdown, True, aReplyMarkup)
     else
-      FBot.sendMessage(emj_FileFolder+' '+mdCode+IncludeTrailingPathDelimiter(aPath)+mdCode+' '+emj_FileFolder, pmMarkdown, True, aReplyMarkup);
+      FBot.sendMessage(FormatPath(aPath), pmMarkdown, True, aReplyMarkup);
   finally
     aReplyMarkup.Free;
     aList.Free;
@@ -333,6 +388,11 @@ end;
 procedure TShellThread.FileHandler(const aPath: String);
 begin
   FBot.sendDocumentByFileName(FBot.CurrentChatId, aPath, ExtractFileDir(aPath));
+end;
+
+class function TShellThread.FormatPath(const aPath: String): String;
+begin
+  Result:=emj_FileFolder+' '+mdCode+IncludeTrailingPathDelimiter(aPath)+mdCode+' '+emj_FileFolder;
 end;
 
 procedure TShellThread.OutputStd(const NoOutput: String);
@@ -369,7 +429,7 @@ begin
   end; }
 end;
 
-function TShellThread.ParsePath(const aMessage: String): String;
+class function TShellThread.ParsePath(const aMessage: String): String;
 var
   aStart, aFinish: Integer;
 begin
@@ -433,10 +493,12 @@ begin
   FProc.Execute;
   FTerminated:=False;
   FLPTimeout:=Cnfg.APITimeout;
+
+  Logger.Info('Log started');
 end;
 
 destructor TShellThread.Destroy;
-begin
+begin 
   FreeAndNil(FProc);
   FreeAndNil(FBot);
   FreeAndNil(FLogger);
