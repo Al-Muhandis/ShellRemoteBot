@@ -53,6 +53,7 @@ type
     procedure FileHandler(const aPath: String);
     function GetLogger: TEventLog;
     procedure OutputStd(const NoOutput: String = '');
+    function ParsePath(const aMessage: String): String;
     procedure SendToShellTerminal(const InputString: String);
     {$IFDEF UNIX}procedure SendSIG(SigNumber: Byte);{$ENDIF}
     procedure SetLogger(AValue: TEventLog);
@@ -247,35 +248,23 @@ end;
 
 procedure TShellThread.CallbackDir(const aMessage, aName: String);
 var
-  aStart, aFinish: Integer;
   aPath: String;
 begin
-  aStart:=Pos(emj_FileFolder+' ', aMessage);
-  if aStart=0 then Exit;
-  Inc(aStart, Length(emj_FileFolder)+1);
-  aFinish:=PosEx(' '+emj_FileFolder, aMessage, aStart);
-  if aFinish=0 then Exit;
-  aPath:=IncludeTrailingPathDelimiter(Copy(aMessage, aStart, aFinish-aStart));
   if aName='..' then
-    aPath:=ExtractFileDir(ExcludeTrailingPathDelimiter(aPath))
+    aPath:=ExtractFileDir(ExcludeTrailingPathDelimiter(ParsePath(aMessage)))
   else
-    aPath:=aPath+aName;
+    aPath:=ParsePath(aMessage)+aName;
   DirHandler(IncludeTrailingPathDelimiter(aPath));
 end;
 
 procedure TShellThread.CallbackFile(const aMessage, aName: String);
-var
-  aStart, aFinish: Integer;
-  aPath: String;
 begin
-  aStart:=Pos(emj_FileFolder+' ', aMessage);
-  if aStart=0 then Exit;
-  Inc(aStart, Length(emj_FileFolder)+1);
-  aFinish:=PosEx(' '+emj_FileFolder, aMessage, aStart);
-  if aFinish=0 then Exit;
-  aPath:=IncludeTrailingPathDelimiter(Copy(aMessage, aStart, aFinish-aStart));
-  aPath:=aPath+aName;
-  FileHandler(aPath);
+  FileHandler(ParsePath(aMessage)+aName);
+end;
+
+procedure TShellThread.CallbackInput(const aMessage: TTelegramMessageObj);
+begin
+
 end;
 
 procedure TShellThread.CallbackScript(const aFileName: String);
@@ -378,6 +367,19 @@ begin
     FBot.sendMessage(Copy(CharBuffer, 0, ReadCount));
 //        Write(StdErr, Copy(CharBuffer, 0, ReadCount));
   end; }
+end;
+
+function TShellThread.ParsePath(const aMessage: String): String;
+var
+  aStart, aFinish: Integer;
+begin
+  Result:=EmptyStr;
+  aStart:=Pos(emj_FileFolder+' ', aMessage);
+  if aStart=0 then Exit;
+  Inc(aStart, Length(emj_FileFolder)+1);
+  aFinish:=PosEx(' '+emj_FileFolder, aMessage, aStart);
+  if aFinish=0 then Exit;
+  Result:=IncludeTrailingPathDelimiter(Copy(aMessage, aStart, aFinish-aStart));
 end;
 
 procedure TShellThread.SendToShellTerminal(const InputString: String);
