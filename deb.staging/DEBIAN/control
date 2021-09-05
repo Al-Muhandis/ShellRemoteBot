@@ -1,0 +1,8 @@
+Package: tgsh
+Version: 1.1.1.20-1
+Maintainer: Renat Suleymanov <mail@Renat.Su>
+Architecture: amd64
+Section: utils
+Description: Shell remote app via telegram bot
+Depends: dash
+Origin: https://github.com/Al-Muhandis/ShellRemoteBot

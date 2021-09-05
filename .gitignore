@@ -42,3 +42,4 @@ x86_64-linux/
 # Binary
 tests/console
 tgshd
+deb.staging/usr/bin/tgshd
