@@ -111,11 +111,9 @@ begin
   begin
     FLogger:=TEventLog.Create(nil);
     FLogger.Identification:='Shell thread';
-    FLogger.LogType:=ltFile;
-    FLogger.FileName:='/var/log/'+'tgshd.log';
+    FLogger.LogType:=ltSystem;
     FLogger.Active:=True;
     FLogger.AppendContent:=True;
-    //FLogger.LogType:=ltFile;
   end;
   Result:=FLogger;
 end;
