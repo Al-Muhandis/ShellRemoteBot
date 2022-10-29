@@ -100,7 +100,7 @@ end;
 
 function TConfig.GetScriptsDirectory: String;
 begin
-  Result:=FIni.ReadString('Scripts', 'Directory', CnfDir);
+  Result:=IncludeTrailingPathDelimiter(FIni.ReadString('Scripts', 'Directory', CnfDir));
 end;
 
 function TConfig.GetServiceUser: Int64;
