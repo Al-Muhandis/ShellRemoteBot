@@ -37,7 +37,7 @@ uses
 
 function IsolateShellOutput(const S: String): String;
 begin
-  Result:='```sh'+LineEnding+S+LineEnding+'```';
+  Result:='```log'+LineEnding+S+LineEnding+'```';
 end;
 
 { TTgShBot }
