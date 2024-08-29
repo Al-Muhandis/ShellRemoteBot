@@ -92,6 +92,15 @@ or you can set the folder in the settings in the the `[Scripts]` section / `Dire
 ### /dir
 Calls the file Manager. You can set the default value in the configuration file
 
+## Possible problems
+
+In case of a similar error: `[Error] [HTTP Post JSON] Httpclient: Invalid Protocol`
+You may be able to install SSL libraries on the system (for Linux):
+```sh
+sudo apt installs libssl-dev
+```
+
+
 ## HTTP proxy
 If you want to add HTTP proxy support, then:
 + add `laz_synapse.lpk` depending on the project
