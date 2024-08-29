@@ -61,7 +61,7 @@ You can easily install using a .deb file on Debian/Ubuntu/etc.
 Download deb package from release section https://github.com/Al-Muhandis/ShellRemoteBot/releases
 Then install for example:
 ``` BASH
-sudo dpkg --install tgsh_1.2-1_amd64.deb
+sudo dpkg --install tgshd_1.2.4-1_amd64.deb
 # After package installation set up at least token and admin user id in the INI file located at /etc/tgshd/tgshd.ini
 # for example with Nano editor
 sudo nano /etc/tgshd/tgshd.ini
