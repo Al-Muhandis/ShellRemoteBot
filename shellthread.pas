@@ -514,7 +514,10 @@ begin
         OutputStd;
       except
         on E: Exception do
+        begin
           Logger.Error(E.ClassName+': '+E.Message);
+          Sleep(5000);    // sleep in case of an error to avoid sending a large number of requests to the telegram server
+        end;
       end;
     end;
   except
