@@ -1,0 +1,3 @@
+[submodule "use/fp-telegram"]
+	path = use/fp-telegram
+	url = https://github.com/Al-Muhandis/fp-telegram/
