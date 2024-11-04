@@ -19,7 +19,11 @@ Function PrivPrepare {
     )
     ForEach ($REPLY in $VAR) {
         If (-not (Get-Command $REPLY.Cmd -ea 'continue')) {
-            Invoke-WebRequest -Uri $REPLY.Url -OutFile (Split-Path -Path $REPLY.Url -Leaf).Split('?')[0]
+            $params = @{
+                Uri = $REPLY.Url
+                OutFile = (Split-Path -Path $REPLY.Url -Leaf).Split('?')[0]
+            }
+            Invoke-WebRequest @params
             Start-Process -PassThru -Wait -FilePath $params.OutFile -ArgumentList '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
             Remove-Item $params.OutFile
             $env:PATH+=";$($REPLY.Path)"
