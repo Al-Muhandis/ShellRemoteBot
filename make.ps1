@@ -2,70 +2,57 @@
 ##############################################################################################################
 
 Function PrivClipper {
-    Write-Output "
-Usage: pwsh -File make.ps1 [OPTIONS]
+    Return "
+Usage: pwsh -File $($PSCommandPath) [OPTIONS]
 Options:
     build   Build program
 "
 }
 
 Function PrivPrepare {
-    Start-Process -Wait -FilePath 'choco' -ArgumentList 'install git -y'
-    Start-Process -Wait -FilePath 'choco' -ArgumentList 'install fpc -y'
-    Start-Process -Wait -FilePath 'choco' -ArgumentList 'install lazarus -y'
-    Start-Process -Wait -FilePath 'refreshenv'
-}
-
-Function PrivPkgsearch {
-    ForEach ($REPLY in $args) {
-        If (-not (Start-Process -Wait -FilePath 'lazbuild' -ArgumentList "--verbose-pkgsearch $($REPLY)")) {
-            Start-Process -Wait -FilePath 'lazbuild' -ArgumentList "--add-package $($REPLY)"
+    $VAR = @(
+        @{
+            Cmd = 'lazbuild'
+            Url = 'https://netix.dl.sourceforge.net/project/lazarus/Lazarus%20Windows%2064%20bits/Lazarus%203.6/lazarus-3.6-fpc-3.2.2-win64.exe?viasf=1'
+            Path = "C:\Lazarus"
         }
-    }
-}
-
-Function PrivPackages {
-    If ( Test-Path -Path 'use' ) {
-        Start-Process -Wait -FilePath 'git' -ArgumentList 'submodule update --init --recursive'
-        Start-Process -Wait -FilePath 'git' -ArgumentList 'submodule update --recursive --remote'
-    } Else {
-        New-Item -ItemType Directory -Name 'use'
-    }
-    If ($args.count -gt 0) {
-        ForEach ($REPLY in $args) {
-            $params = @{
-                Uri = "https://packages.lazarus-ide.org/$($REPLY).zip"
-                OutFile = "$($REPLY).zip"
-            }
-            $ProgressPreference = 'SilentlyContinue'
-            Invoke-WebRequest @params
-            $ProgressPreference = 'Continue'
-            Expand-Archive -Path $params.OutFile -DestinationPath $REPLY -Force
+    )
+    ForEach ($REPLY in $VAR) {
+        If (-not (Get-Command $REPLY.Cmd -ea 'continue')) {
+            Invoke-WebRequest -Uri $REPLY.Url -OutFile (Split-Path -Path $REPLY.Url -Leaf).Split('?')[0]
+            Start-Process -PassThru -Wait -FilePath $params.OutFile -ArgumentList '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
             Remove-Item $params.OutFile
+            $env:PATH+=";$($REPLY.Path)"
+            Get-Command $REPLY.Cmd
         }
-    }
-    Get-ChildItem -Filter '*.lpk' -Recurse -File –Path 'use' | ForEach-Object {
-        Start-Process -Wait -FilePath 'lazbuild' -ArgumentList "--add-package-link $($_.Name)"
     }
 }
 
 Function PrivMain {
+    $ErrorActionPreference = 'stop'
+    Set-PSDebug -Strict -Trace 1
     Invoke-ScriptAnalyzer -EnableExit -Path $PSCommandPath
-    Set-PSDebug -Strict
     If ($args.count -gt 0) {
-        PrivPrepare
         Switch ($args[0]) {
             'build' {
-                PrivPkgsearch
-                PrivPackages
+                PrivPrepare
+                If (Test-Path -Path 'use') {
+                    Start-Process -PassThru -Wait -FilePath 'git' -ArgumentList 'submodule', 'update', '--recursive', '--init'
+                    Start-Process -PassThru -Wait -FilePath 'git' -ArgumentList 'submodule', 'update', '--recursive', '--remote'
+                    Get-ChildItem -Filter '*.lpk' -Recurse -File –Path 'use' | ForEach-Object {
+                        Start-Process -PassThru -Wait -FilePath 'lazbuild' -ArgumentList '--add-package-link', $_.Name
+                    }
+                }
                 Get-ChildItem -Filter '*.lpi' -Recurse -File –Path 'src' | ForEach-Object {
-                    Start-Process -Wait -FilePath 'lazbuild' -ArgumentList "--no-write-project --recursive --no-write-project --build-mode=release $($_.Name)"
+                    Start-Process -PassThru -Wait -FilePath 'lazbuild' -ArgumentList '--no-write-project', '--recursive', '--build-mode=release', $_.Name
                 }
             }
-            Default {PrivClipper}
+            Default {
+                PrivClipper
+            }
         }
     } Else {
-        Write-Output $args.count
+        PrivClipper
     }
 }
 
