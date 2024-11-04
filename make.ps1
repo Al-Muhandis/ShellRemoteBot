@@ -41,14 +41,14 @@ Function PrivMain {
             'build' {
                 PrivPrepare
                 If (Test-Path -Path 'use') {
-                    Start-Process -PassThru -Wait -FilePath 'git' -ArgumentList 'submodule', 'update', '--recursive', '--init'
-                    Start-Process -PassThru -Wait -FilePath 'git' -ArgumentList 'submodule', 'update', '--recursive', '--remote'
+                    Start-Process -Wait -FilePath 'git' -ArgumentList 'submodule', 'update', '--recursive', '--init'
+                    Start-Process -Wait -FilePath 'git' -ArgumentList 'submodule', 'update', '--recursive', '--remote'
                     Get-ChildItem -Filter '*.lpk' -Recurse -File –Path 'use' | ForEach-Object {
                         Start-Process -PassThru -Wait -FilePath 'lazbuild' -ArgumentList '--add-package-link', $_.Name
                     }
                 }
                 Get-ChildItem -Filter '*.lpi' -Recurse -File –Path 'src' | ForEach-Object {
-                    Start-Process -PassThru -Wait -FilePath 'lazbuild' -ArgumentList '--no-write-project', '--recursive', '--build-mode=release', $_.Name
+                    Start-Process -Wait -FilePath 'lazbuild' -ArgumentList '--no-write-project', '--recursive', '--build-mode=release', $_.Name
                 }
             }
             Default {
