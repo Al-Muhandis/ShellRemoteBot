@@ -1,7 +1,7 @@
 ﻿#!/usr/bin/env pwsh
 ##############################################################################################################
 
-Function PrivClipper {
+Function Show-Usage {
     Return "
 Usage: pwsh -File $($PSCommandPath) [OPTIONS]
 Options:
@@ -9,7 +9,7 @@ Options:
 "
 }
 
-Function PrivWget {
+Function Request-File {
     ForEach ($REPLY in $args) {
         $params = @{
             Uri = $REPLY
@@ -20,79 +20,71 @@ Function PrivWget {
     }
 }
 
-Function PrivMsiexec {
+Function Install-Program {
     While ($Input.MoveNext()) {
-        $params = @{}
         Switch ((Split-Path -Path $Input.Current -Leaf).Split('.')[-1]) {
             'msi' {
-                $params = @{
-                    FilePath = 'msiexec'
-                    ArgumentList = '/passive', '/package', $Input.Current
-                }
+                & msiexec /passive /package $Input.Current | Out-Host
             }
             'exe' {
-                $params = @{
-                    FilePath = $Input.Current
-                    ArgumentList = '/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
-                }
+                & ".\$($Input.Current)" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Host
             }
         }
-        Start-Process -PassThru -Wait @params
         Remove-Item $Input.Current
     }
 }
 
-Function PrivLazBuild {
+Function Build-Project {
     $VAR = @{
         Cmd = 'lazbuild'
         Url = 'https://netix.dl.sourceforge.net/project/lazarus/Lazarus%20Windows%2064%20bits/Lazarus%203.6/lazarus-3.6-fpc-3.2.2-win64.exe?viasf=1'
         Path = "C:\Lazarus"
     }
-    If (-not (Get-Command $VAR.Cmd -ea 'continue')) {
-        PrivWget $VAR.Url | PrivMsiexec
+    Try {
+        Get-Command $VAR.Cmd
+    } Catch {
+        Request-File $VAR.Url | Install-Program
         $env:PATH+=";$($VAR.Path)"
         Get-Command $VAR.Cmd
     }
     If ( Test-Path -Path 'use\components.txt' ) {
-        Start-Process -Wait -FilePath 'git' -ArgumentList 'submodule', 'update', '--recursive', '--init'
-        Start-Process -Wait -FilePath 'git' -ArgumentList 'submodule', 'update', '--recursive', '--remote'
+        & git submodule update --recursive --init | Out-Host
+        & git submodule update --recursive --remote | Out-Host
         Get-Content -Path 'use\components.txt' | ForEach-Object {
-            If (-not (Start-Process -ea 'continue' -Wait -FilePath 'lazbuild' -ArgumentList '--verbose-pkgsearch', $_)) {
-                If (-not (Start-Process -ea 'continue' -Wait -FilePath 'lazbuild' -ArgumentList '--add-package', $_)) {
-                    If (-not (Test-Path -Path 'use\components.txt')) {
-                        $OutFile = PrivWget "https://packages.lazarus-ide.org/$($_).zip"
-                        Expand-Archive -Path $OutFile -DestinationPath "use\$($_)" -Force
-                        Remove-Item $OutFile
-                    }
+            If ((-not (& lazbuild --verbose-pkgsearch $_ | Out-Null)) -and
+                (-not (& lazbuild --add-package $_ | Out-Null)) -and
+                (-not (Test-Path -Path 'use\components.txt'))) {
+                    $OutFile = Request-File "https://packages.lazarus-ide.org/$($_).zip"
+                    Expand-Archive -Path $OutFile -DestinationPath "use\$($_)" -Force
+                    Remove-Item $OutFile
                 }
-            }
         }
         Get-ChildItem -Filter '*.lpk' -Recurse -File –Path 'use' | ForEach-Object {
-            Start-Process -Wait -FilePath 'lazbuild' -ArgumentList '--add-package-link', $_.Name
+            & lazbuild --add-package-link $_ | Out-Host
         }
     }
     Get-ChildItem -Filter '*.lpi' -Recurse -File –Path 'src' | ForEach-Object {
-        Start-Process -Wait -FilePath 'lazbuild' -ArgumentList '--no-write-project', '--recursive', '--build-mode=release', $_.Name
+        & lazbuild --no-write-project --recursive --build-mode=release $_ | Out-Host
     }
 }
 
-Function PrivMain {
+Function Switch-Action {
     $ErrorActionPreference = 'stop'
     Set-PSDebug -Strict -Trace 1
     Invoke-ScriptAnalyzer -EnableExit -Path $PSCommandPath
     If ($args.count -gt 0) {
         Switch ($args[0]) {
             'build' {
-                PrivLazBuild
+                Build-Project
             }
             Default {
-                PrivClipper
+                Show-Usage
             }
         }
     } Else {
-        PrivClipper
+        Show-Usage
     }
 }
 
 ##############################################################################################################
-PrivMain @args
+Switch-Action @args | Out-Null
