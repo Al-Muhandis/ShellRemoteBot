@@ -109,7 +109,7 @@ With the command (`/delete` `/fullpath/to/file`) You can delete file
 In case of a similar error: `[Error] [HTTP Post JSON] Httpclient: Invalid Protocol`
 You may be able to install SSL libraries on the system (for Linux):
 ```sh
-sudo apt installs libssl-dev
+sudo apt install libssl-dev
 ```
 
 
