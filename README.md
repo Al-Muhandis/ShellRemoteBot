@@ -57,17 +57,27 @@ DefaultDir=
 3. Run as a console program or daemon/service.
 
 ### DEB package
-You can easily install using a .deb file on Debian/Ubuntu/etc. 
+You can easily install/upgrade using a .deb file on Debian/Ubuntu/etc.
+
+#### installation with deb 
 Download deb package from release section https://github.com/Al-Muhandis/ShellRemoteBot/releases
 Then install for example:
-``` BASH
-sudo dpkg --install tgshd_1.2.4-1_amd64.deb
+```SH
+sudo dpkg --install tgshd_1.2.5-2_amd64.deb
 # After package installation set up at least token and admin user id in the INI file located at /etc/tgshd/tgshd.ini
 # for example with Nano editor
 sudo nano /etc/tgshd/tgshd.ini
 # Now You can run /usr/bin/tgshd -r
 # Or is better enable and run as a daemon (service file for systemd inlcluded in the DEB package)
 systemctl enable tgshd
+systemctl start tgshd
+```
+#### Upgrade with deb
+
+```SH
+sudo systemctl stop tgshd
+sudo dpkg --install tgshd_1.2.5-2_amd64.deb
+sudo systemctl daemon-reload
 systemctl start tgshd
 ```
 
@@ -91,6 +101,8 @@ Calls the menu for executing the prepared script from the list of files. Scripts
 or you can set the folder in the settings in the the `[Scripts]` section / `Directory`
 ### /dir
 Calls the file Manager. You can set the default value in the configuration file
+### /delete
+With the command (`/delete` `/fullpath/to/file`) You can delete file
 
 ## Possible problems
 

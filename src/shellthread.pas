@@ -21,7 +21,9 @@ type
     FProc: TProcess;
     FTerminated: Boolean;
     FLPTimeout: Integer;
-    procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);
+    procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);  
+    procedure BotReceiveDeleteCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
+      AMessage: TTelegramMessageObj);
     procedure BotReceiveMessage({%H-}ASender: TObject; AMessage: TTelegramMessageObj);     
     function BotReceiveDocument(aDocument: TTelegramDocument; const aPath: String): Boolean;
     { Read output from shell terminal by command }
@@ -89,11 +91,13 @@ const
   _ScriptFileExt='.script';
 
   emj_FileFolder='📁';
+  emj_Wrnng='⚠️';
 
   dt_script='script';
   dt_dir='dir';
   dt_file='file'; 
-  dt_input='input';
+  dt_input='input'; 
+  dt_dlt='delete';
 
 
 { TShellThread }
@@ -181,6 +185,22 @@ begin
     dt_file:   CallbackFile(ACallback.Message.Text, aName);
     dt_input:  CallbackInput(ACallback.Message.Text);
   end;
+end;
+
+procedure TShellThread.BotReceiveDeleteCommand(ASender: TObject; const ACommand: String; AMessage: TTelegramMessageObj);
+var
+  aPath: String;
+begin
+  if not CommandStart then
+    Exit;
+  aPath:=ExtractDelimited(2, AMessage.Text, [' ']);
+  if aPath.IsEmpty then
+    FBot.sendMessage('Use command line format like /delete `/path-to-the-file/file-name.ext`', pmMarkdown)
+  else
+    if DeleteFileUTF8(aPath) then
+      FBot.sendMessage(Format('File (%s) succesfully deleted', [aPath]))
+    else
+      FBot.sendMessage(emj_Wrnng+' '+Format('File (%s) deletion error', [aPath]))
 end;
 
 procedure TShellThread.BotReceiveReadCommand(ASender: TObject;
@@ -481,7 +501,8 @@ begin
   FBot.CommandHandlers['/sigkill']:=@BotReceiveSIGKILLCommand;
   FBot.CommandHandlers['/sigquit']:=@BotReceiveSIGQUITCommand;
   FBot.CommandHandlers['/sigterm']:=@BotReceiveSIGTERMCommand;{$ENDIF}
-  FBot.CommandHandlers['/'+dt_dir]:=@BotReceiveFileCommand;
+  FBot.CommandHandlers['/'+dt_dir]:=@BotReceiveFileCommand;           
+  FBot.CommandHandlers['/'+dt_dlt]:=@BotReceiveDeleteCommand;
   FBot.OnReceiveCallbackQuery:=@BotReceiveCallbackQuery;{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
   FBot.ServiceUser:=Cnfg.ServiceUser;
