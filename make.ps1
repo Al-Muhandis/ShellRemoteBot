@@ -11,12 +11,27 @@ Options:
 
 Function Request-File {
     ForEach ($REPLY in $args) {
+        $OutFileName = (Split-Path -Path $REPLY -Leaf).Split('?')[0]
+        
+        # Delete old file if exists
+        If (Test-Path $OutFileName) {
+            Remove-Item $OutFileName -Force
+        }
+        
         $params = @{
             Uri = $REPLY
-            OutFile = (Split-Path -Path $REPLY -Leaf).Split('?')[0]
+            OutFile = $OutFileName
         }
-        Invoke-WebRequest @params | Out-Null
-        Return $params.OutFile
+        
+        Write-Host "Download: $OutFileName"
+        Invoke-WebRequest @params -TimeoutSec 600
+        
+        # Check if file does not exists or empty
+        If (-not (Test-Path $OutFileName) -or (Get-Item $OutFileName).Length -lt 1MB) {
+            Throw "Error: $OutFileName invalid or empty"
+        }
+        
+        Return $OutFileName
     }
 }
 
