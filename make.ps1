@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 ##############################################################################################################
 
 Function Show-Usage {
@@ -11,41 +11,74 @@ Options:
 
 Function Request-File {
     ForEach ($REPLY in $args) {
-        $params = @{
-            Uri = $REPLY
-            OutFile = (Split-Path -Path $REPLY -Leaf).Split('?')[0]
+        $OutFile = (Split-Path -Path $REPLY -Leaf).Split('?')[0]
+        $OutFilePath = Join-Path -Path (Get-Location) -ChildPath $OutFile
+        
+        Try {
+            Write-Host "Downloading: $REPLY"
+            $ProgressPreference = 'SilentlyContinue'
+            Invoke-WebRequest -Uri $REPLY `
+                -OutFile $OutFilePath `
+                -TimeoutSec 600 `
+                -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" `
+                -MaximumRedirection 5 | Out-Null
+            
+            $fileSize = (Get-Item $OutFilePath).Length
+            Write-Host "Downloaded: $OutFile (Size: $([Math]::Round($fileSize/1MB, 2))MB)"
+            
+            If ((Test-Path $OutFilePath) -and $fileSize -gt 100MB) {
+                Return $OutFile
+            } Else {
+                Throw "File is too small ($fileSize bytes) or doesn't exist"
+            }
+        } Catch {
+            Write-Error "Failed to download: $_"
+            If (Test-Path $OutFilePath) { Remove-Item $OutFilePath -Force }
+            Return $null
         }
-        Invoke-WebRequest @params | Out-Null
-        Return $params.OutFile
     }
 }
 
 Function Install-Program {
     While ($Input.MoveNext()) {
-        Switch ((Split-Path -Path $Input.Current -Leaf).Split('.')[-1]) {
-            'msi' {
-                & msiexec /passive /package $Input.Current | Out-Host
+        $FilePath = $Input.Current
+        If (Test-Path $FilePath) {
+            Write-Host "Installing: $FilePath"
+            $ext = (Split-Path -Path $FilePath -Leaf).Split('.')[-1]
+            Switch ($ext) {
+                'msi' {
+                    & msiexec /passive /package $FilePath | Out-Host
+                }
+                'exe' {
+                    & $FilePath /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Host
+                }
             }
-            'exe' {
-                & ".\$($Input.Current)" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Host
-            }
+            Remove-Item $FilePath -Force
+            Write-Host "Installation completed"
         }
-        Remove-Item $Input.Current
     }
 }
 
 Function Build-Project {
     $VAR = @{
         Cmd = 'lazbuild'
-        Url = 'https://netix.dl.sourceforge.net/project/lazarus/Lazarus%20Windows%2064%20bits/Lazarus%203.6/lazarus-3.6-fpc-3.2.2-win64.exe?viasf=1'
+        Url = 'https://sourceforge.net/projects/lazarus/files/Lazarus%20Windows%2064%20bits/Lazarus%204.8/lazarus-4.8-fpc-3.2.2-win64.exe/download'
         Path = "C:\Lazarus"
     }
     Try {
-        Get-Command $VAR.Cmd
+        Get-Command $VAR.Cmd | Out-Null
+        Write-Host "Lazarus is already installed"
     } Catch {
-        Request-File $VAR.Url | Install-Program
-        $env:PATH+=";$($VAR.Path)"
-        Get-Command $VAR.Cmd
+        Write-Host "Lazarus not found, installing..."
+        $OutFile = Request-File $VAR.Url
+        If ($OutFile) {
+            $OutFile | Install-Program
+            $env:PATH+=";$($VAR.Path)"
+            Get-Command $VAR.Cmd | Out-Null
+            Write-Host "Lazarus installed successfully"
+        } Else {
+            Throw "Failed to download Lazarus"
+        }
     }
     If ( Test-Path -Path 'use\components.txt' ) {
         & git submodule update --recursive --init | Out-Host
