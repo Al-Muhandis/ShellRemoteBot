@@ -11,41 +11,40 @@ Options:
 
 Function Request-File {
     ForEach ($REPLY in $args) {
-        $OutFileName = (Split-Path -Path $REPLY -Leaf).Split('?')[0]
-        
-        # Delete old file if exists
-        If (Test-Path $OutFileName) {
-            Remove-Item $OutFileName -Force
-        }
-        
+        $OutFile = (Split-Path -Path $REPLY -Leaf).Split('?')[0]
+        $OutFilePath = Join-Path -Path (Get-Location) -ChildPath $OutFile
         $params = @{
             Uri = $REPLY
-            OutFile = $OutFileName
+            OutFile = $OutFilePath
         }
-        
-        Write-Host "Download: $OutFileName"
-        Invoke-WebRequest @params -TimeoutSec 600
-        
-        # Check if file does not exists or empty
-        If (-not (Test-Path $OutFileName) -or (Get-Item $OutFileName).Length -lt 1MB) {
-            Throw "Error: $OutFileName invalid or empty"
+        Try {
+            Invoke-WebRequest @params -TimeoutSec 600 | Out-Null
+            If ((Test-Path $OutFilePath) -and (Get-Item $OutFilePath).Length -gt 1MB) {
+                Return $OutFile
+            } Else {
+                Throw "Downloaded file is invalid or empty"
+            }
+        } Catch {
+            Write-Error "Failed to download from $REPLY : $_"
+            Return $null
         }
-        
-        Return $OutFileName
     }
 }
 
 Function Install-Program {
     While ($Input.MoveNext()) {
-        Switch ((Split-Path -Path $Input.Current -Leaf).Split('.')[-1]) {
-            'msi' {
-                & msiexec /passive /package $Input.Current | Out-Host
+        $FilePath = $Input.Current
+        If (Test-Path $FilePath) {
+            Switch ((Split-Path -Path $FilePath -Leaf).Split('.')[-1]) {
+                'msi' {
+                    & msiexec /passive /package $FilePath | Out-Host
+                }
+                'exe' {
+                    & $FilePath /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Host
+                }
             }
-            'exe' {
-                & ".\$($Input.Current)" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Host
-            }
+            Remove-Item $FilePath -Force
         }
-        Remove-Item $Input.Current
     }
 }
 
