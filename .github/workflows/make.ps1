@@ -50,7 +50,8 @@ Function Install-Program {
                     & msiexec /passive /package $FilePath | Out-Host
                 }
                 'exe' {
-                    & $FilePath /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Host
+                    $arguments = @('/SP-', '/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES')
+                    Start-Process -FilePath $_ -ArgumentList $arguments -Wait -NoNewWindow
                 }
             }
             Remove-Item $FilePath -Force
