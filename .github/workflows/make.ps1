@@ -51,7 +51,7 @@ Function Install-Program {
                 }
                 'exe' {
                     $arguments = @('/SP-', '/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES')
-                    Start-Process -FilePath $_ -ArgumentList $arguments -Wait -NoNewWindow
+                    Start-Process -FilePath $FilePath -ArgumentList $arguments -Wait -NoNewWindow
                 }
             }
             Remove-Item $FilePath -Force
