@@ -2,38 +2,32 @@
 name: Make
 
 on:
-  push:
-    branches:
-      - "**"
   pull_request:
     branches:
       - master
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 12
     strategy:
       matrix:
         os:
           - ubuntu-latest
           - windows-latest
+
     steps:
     - name: Checkout
       uses: actions/checkout@v7
       with:
-        submodules: true
+        submodules: recursive
 
     - name: Build on Linux
-      if: runner.os == 'Linux'
+      if: runner.os != 'Windows'
       shell: bash
-      run: bash -x make.sh build
+      run: bash -x '.github/workflows/make.sh' build
 
     - name: Build on Windows
       if: runner.os == 'Windows'
       shell: powershell
-      run: pwsh -File make.ps1 build
+      run: pwsh -File '.github/workflows/make.ps1' build
