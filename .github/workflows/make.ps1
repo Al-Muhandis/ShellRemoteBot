@@ -50,7 +50,8 @@ Function Install-Program {
                     & msiexec /passive /package $FilePath | Out-Host
                 }
                 'exe' {
-                    & $FilePath /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Host
+                    $arguments = @('/SP-', '/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES')
+                    Start-Process -FilePath $FilePath -ArgumentList $arguments -Wait -NoNewWindow
                 }
             }
             Remove-Item $FilePath -Force
@@ -62,7 +63,7 @@ Function Install-Program {
 Function Build-Project {
     $VAR = @{
         Cmd = 'lazbuild'
-        Url = 'https://sourceforge.net/projects/lazarus/files/Lazarus%20Windows%2064%20bits/Lazarus%204.8/lazarus-4.8-fpc-3.2.2-win64.exe/download'
+        Url = 'https://download.lazarus-ide.org/Lazarus%20Windows%2064%20bits/Lazarus%204.8/lazarus-4.8-fpc-3.2.2-win64.exe'
         Path = "C:\Lazarus"
     }
     Try {
@@ -80,21 +81,8 @@ Function Build-Project {
             Throw "Failed to download Lazarus"
         }
     }
-    If ( Test-Path -Path 'use\components.txt' ) {
-        & git submodule update --recursive --init | Out-Host
-        & git submodule update --recursive --remote | Out-Host
-        Get-Content -Path 'use\components.txt' | ForEach-Object {
-            If ((-not (& lazbuild --verbose-pkgsearch $_ | Out-Null)) -and
-                (-not (& lazbuild --add-package $_ | Out-Null)) -and
-                (-not (Test-Path -Path 'use\components.txt'))) {
-                    $OutFile = Request-File "https://packages.lazarus-ide.org/$($_).zip"
-                    Expand-Archive -Path $OutFile -DestinationPath "use\$($_)" -Force
-                    Remove-Item $OutFile
-                }
-        }
-        Get-ChildItem -Filter '*.lpk' -Recurse -File –Path 'use' | ForEach-Object {
-            & lazbuild --add-package-link $_ | Out-Host
-        }
+    Get-ChildItem -Filter '*.lpk' -Recurse -File –Path 'use' | ForEach-Object {
+        & lazbuild --add-package-link $_ | Out-Host
     }
     Get-ChildItem -Filter '*.lpi' -Recurse -File –Path 'src' | ForEach-Object {
         & lazbuild --no-write-project --recursive --build-mode=release $_ | Out-Host
