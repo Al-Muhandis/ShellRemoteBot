@@ -4,7 +4,10 @@ set -e
 
 case "$1" in
     configure)
-        if command -v systemctl >/dev/null 2>&1 && systemctl is-system-running >/dev/null 2>&1; then
+        # /run/systemd/system is the canonical "systemd is in charge" check:
+        # is-system-running exits non-zero for state "degraded" (failed units
+        # elsewhere) and would skip the whole block
+        if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
             systemctl daemon-reload || true
             systemctl enable tgshd.service || true
             # start (or restart on upgrade to pick up the new binary)
