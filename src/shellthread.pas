@@ -7,6 +7,7 @@ interface
 uses
   Classes, SysUtils, tgtypes, tgsendertypes, process, eventlog, tgshbot, UTF8Process
   {$IFDEF MSWINDOWS}, Windows{$ENDIF}
+  {$IFDEF UNIX}, BaseUnix{$ENDIF}
   ;
 
 type
@@ -23,6 +24,7 @@ type
     FChatDirs: TStringList; // chat id -> current folder (also the pending upload folder)
     FRefSeq: Integer;      // monotonically growing token counter
     FLPTimeout: Integer;
+    FShellOwnGroup: Boolean; // the shell leads its own process group (safe to killpg)
     procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);  
     procedure BotReceiveDeleteCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       AMessage: TTelegramMessageObj);
@@ -67,6 +69,8 @@ type
     procedure SetChatDir(AChatId: Int64; const ADir: String);
     procedure SendToShellTerminal(const InputString: String);
     {$IFDEF UNIX}procedure SendSIG(SigNumber: Byte);{$ENDIF}
+    {$IFDEF UNIX}procedure ShellForkEvent(Sender: TObject);{$ENDIF}
+    procedure StartShell;
     procedure SetLogger(AValue: TEventLog);
     property Logger: TEventLog read GetLogger write SetLogger;
     property IsCallback: Boolean read FIsCallBack;
@@ -280,10 +284,10 @@ begin
   if not CommandStart then
     Exit;
   if TryStrToInt(ExtractDelimited(2, AMessage.Text, [' ']), i) then
-    if i<=High(Byte) then
+    if (i>=0) and (i<=High(Byte)) then
       SendSIG(i)
     else
-      FBot.sendMessageSafe('SIG number limit by 255!')
+      FBot.sendMessageSafe('SIG number must be between 0 and 255!')
   else
     FBot.sendMessageSafe('Please, specify SIG portable number. For example:'+LineEnding+
       '```sh'+LineEnding+'/sig 3```'+LineEnding+'where `3` - is SIGQUIT', pmMarkdown);
@@ -618,14 +622,82 @@ begin
 end;
 
 {$IFDEF UNIX}
+{ Runs inside the forked shell child before exec: detach into a new session
+  so the shell leads its own process group and a group signal from SendSIG
+  can never reach the tgshd process itself }
+procedure TShellThread.ShellForkEvent(Sender: TObject);
+begin
+  if FpSetsid<0 then
+    FpExit(126);  // abort the start: the parent falls back to a plain shell
+end;
+
 procedure TShellThread.SendSIG(SigNumber: Byte);
 var
-  Sig: String;
+  i: Integer;
 begin
-  Sig:=chr(SigNumber){+LineEnding};
-  SendToShellTerminal(Sig);
+  if not (Assigned(FProc) and FProc.Running) then
+    Exit;
+  // Deliver the signal by kill(2) instead of terminal input bytes: without a
+  // PTY, chr(N) written to the shell stdin is just input, never a signal.
+  if FShellOwnGroup then
+  begin
+    // the whole process group: the shell and the command it currently runs
+    if FpKill(-FProc.ProcessID, SigNumber)<>0 then
+      FpKill(FProc.ProcessID, SigNumber);
+  end
+  else
+    FpKill(FProc.ProcessID, SigNumber);  // no group isolation: the shell only
+  OutputStd;    // flush what the interrupted command has printed
+  i:=0;
+  while (i<10) and FProc.Running do   // let the signal take effect
+  begin
+    Sleep(100);
+    Inc(i);
+  end;
+  if not FProc.Running then
+  begin
+    OutputStd;
+    StartShell;
+    Logger.Info('Shell terminated by signal '+IntToStr(SigNumber)+', restarted');
+    FBot.sendMessageSafe('Shell terminated by signal '+IntToStr(SigNumber)+', restarted');
+  end;
 end;
 {$ENDIF}
+
+procedure TShellThread.StartShell;
+begin
+  FreeAndNil(FProc);
+  FShellOwnGroup:=False;
+  FProc:=TProcessUTF8.Create(nil);
+  FProc.Options := [poUsePipes, poStderrToOutPut, poNoConsole];
+  {$IFDEF UNIX}
+  try
+    FProc.OnForkEvent:=@ShellForkEvent;
+    FProc.Executable:='sh';
+    FProc.Execute;
+    Sleep(50);   // let a child refused to detach (see ShellForkEvent) die fast
+    if FProc.Running then
+      FShellOwnGroup:=True
+    else
+      raise EProcess.Create('the shell did not start in its own session');
+  except
+    on E: Exception do
+    begin
+      Logger.Error('Failed to start the shell in its own session ('+E.Message+
+        '), falling back to a shell without group isolation');
+      FreeAndNil(FProc);
+      FProc:=TProcessUTF8.Create(nil);
+      FProc.Options := [poUsePipes, poStderrToOutPut, poNoConsole];
+      FProc.Executable:='sh';
+      FProc.Execute;
+    end;
+  end;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  FProc.Executable:='cmd';
+  FProc.Execute;
+  {$ENDIF}
+end;
 
 constructor TShellThread.Create;
 begin
@@ -659,10 +731,7 @@ begin
   FBot.OnReceiveCallbackQuery:=@BotReceiveCallbackQuery;{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
   FBot.ServiceUser:=Cnfg.ServiceUser;
-  FProc:=TProcessUTF8.Create(nil);
-  FProc.Options := [poUsePipes, poStderrToOutPut, poNoConsole];
-  FProc.Executable:={$IFDEF MSWINDOWS}'cmd'{$ELSE}'sh'{$ENDIF};
-  FProc.Execute;
+  StartShell;
   FLPTimeout:=Cnfg.APITimeout;
 
   Logger.Info('Log started');

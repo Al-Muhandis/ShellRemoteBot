@@ -91,8 +91,10 @@ There are some ways to determine your user_id but You can simply send `/myid` to
 Reads messages from the shell console.
 Sometimes the program does not wait for a response immediately after execution in the console, and in this case, you can read the newly appeared messages by the `/read` command.
 ### /sig and /sigXXXX
-It is worked under Unix systems. You can send POSIX signal to terminal. 
+It is worked under Unix systems. The signal is delivered by kill(2) to the whole process group of the shell, i.e. to the shell itself and to the command it is currently running. 
 For example, `/sig 9` where 9 is kill sig number or You can send commands `/sigint`, `/sigkill`, `/sigquit` and `/sigterm`.
+The shell is started in its own session (setsid), so the signals never reach the bot itself.
+If the signal terminates the shell, it is restarted automatically with a fresh environment (the shell state like its working directory and variables is not preserved).
 ### /scripts
 Calls the menu for executing the prepared script from the list of files. Scripts must located in the same folder where the INI file is located,
 or you can set the folder in the settings in the the `[Scripts]` section / `Directory`
