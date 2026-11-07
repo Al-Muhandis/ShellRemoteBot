@@ -1,0 +1,7 @@
+# Debian package and shell scripts must keep LF: dpkg-deb, maintainer
+# scripts and systemd units are consumed on Linux
+*.sh text eol=lf
+deb.staging/DEBIAN/** text eol=lf
+deb.staging/lib/** text eol=lf
+deb.staging/etc/** text eol=lf
+deb.staging/usr/** text eol=lf

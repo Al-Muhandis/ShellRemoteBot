@@ -1,10 +1,10 @@
 Package: tgshd
 Priority: optional
-Version: 1.2.5.1-2
+Version: 1.2.5.5-1
 Maintainer: Renat Suleymanov <mail@Renat.Su>
 Architecture: amd64
 Section: utils
-Depends: dash, libc6 (>= 2.2.5)
+Depends: libc6 (>= 2.2.5)
 Origin: https://github.com/Al-Muhandis/ShellRemoteBot
 Description: Shell remote app via telegram bot
  Helps you work with your server (or remote computer) via telegram bot 

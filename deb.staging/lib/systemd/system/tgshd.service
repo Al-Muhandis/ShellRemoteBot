@@ -1,0 +1,18 @@
+[Unit]
+Description=Telegram terminal
+Documentation=https://github.com/Al-Muhandis/ShellRemoteBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/tgshd -r
+Restart=on-failure
+RestartSec=5
+# Intentionally runs as root WITHOUT sandboxing (no User=, no ProtectSystem,
+# no NoNewPrivileges): the bot is a remote root terminal by design - it must be
+# able to edit /etc, use sudo/su and manage services. Restrict access via the
+# [Users] section of /etc/tgshd/tgshd.ini (Telegram user IDs), not via systemd.
+
+[Install]
+WantedBy=multi-user.target

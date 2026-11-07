@@ -1,0 +1,19 @@
+#!/bin/sh
+# prerm script for tgshd
+set -e
+
+case "$1" in
+    remove|purge)
+        if command -v systemctl >/dev/null 2>&1 && systemctl is-system-running >/dev/null 2>&1; then
+            systemctl stop tgshd.service || true
+        fi
+        ;;
+    upgrade|failed-upgrade)
+        # keep running during upgrade; postinst restarts with the new binary
+        ;;
+    *)
+        echo "prerm called with unknown argument '$1'" >&2
+        ;;
+esac
+
+exit 0

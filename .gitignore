@@ -31,7 +31,9 @@
 # These can be changed by user in Lazarus/project options.
 backup/
 *.bak
-lib/
+/lib/
+src/lib/
+tests/lib/
 
 # Application bundle for Mac OS
 *.app/
@@ -41,5 +43,10 @@ x86_64-linux/
 
 # Binary
 tests/console
-tgshd
+/tgshd
+src/tgshd
 deb.staging/usr/bin/tgshd
+
+# Debian package staging must be complete for the deb build: keep the shipped
+# config template visible even though *.ini is ignored above
+!deb.staging/etc/tgshd/tgshd.ini

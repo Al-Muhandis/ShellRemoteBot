@@ -63,22 +63,19 @@ You can easily install/upgrade using a .deb file on Debian/Ubuntu/etc.
 Download deb package from release section https://github.com/Al-Muhandis/ShellRemoteBot/releases
 Then install for example:
 ```SH
-sudo dpkg --install tgshd_1.2.5-2_amd64.deb
+sudo dpkg --install tgshd_1.2.5.5-1_amd64.deb
 # After package installation set up at least token and admin user id in the INI file located at /etc/tgshd/tgshd.ini
 # for example with Nano editor
 sudo nano /etc/tgshd/tgshd.ini
-# Now You can run /usr/bin/tgshd -r
-# Or is better enable and run as a daemon (service file for systemd inlcluded in the DEB package)
-systemctl enable tgshd
-systemctl start tgshd
+sudo systemctl restart tgshd
+# The systemd unit is included in the DEB package, enabled and started automatically.
+# On restart of the service it runs /usr/bin/tgshd -r
 ```
 #### Upgrade with deb
 
 ```SH
-sudo systemctl stop tgshd
-sudo dpkg --install tgshd_1.2.5-2_amd64.deb
-sudo systemctl daemon-reload
-systemctl start tgshd
+sudo dpkg --install tgshd_1.2.5.5-1_amd64.deb
+# The package maintainer scripts stop the old process and restart the service with the new binary automatically.
 ```
 
 ## Users rights and telegram user ID

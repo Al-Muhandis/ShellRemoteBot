@@ -1,0 +1,17 @@
+#!/bin/sh
+# postrm script for tgshd
+set -e
+
+case "$1" in
+    remove|purge)
+        if command -v systemctl >/dev/null 2>&1 && systemctl is-system-running >/dev/null 2>&1; then
+            systemctl disable tgshd.service || true
+        fi
+        ;;
+esac
+
+if command -v systemctl >/dev/null 2>&1 && systemctl is-system-running >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+fi
+
+exit 0
