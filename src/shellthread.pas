@@ -57,7 +57,8 @@ type
     function PathByToken(const AToken: String; out APath: String): Boolean;
     function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
-    procedure DirHandler(const aPath: String);
+    procedure DirHandler(const aPath: String; aOffset: Integer = 0);
+    procedure SplitPageToken(const AValue: String; out APath: String; out AOffset: Integer);
     procedure FileHandler(const aPath: String);
     class function FormatPath(const aPath: String): String;
     function GetChatDir(AChatId: Int64; out ADir: String): Boolean;
@@ -95,7 +96,9 @@ const
 {$ENDIF}
   _ScriptFileExt='.script';
   _MaxPathRefs = 1024;   // size of the callback token -> path ring map
-  _MaxButtons = 98;      // Telegram inline keyboard hard limit is 100 buttons
+  _MaxButtons = 90;      // entries per /dir page: '..' + prev/next + Upload
+                         // must also fit into the 100-button Telegram hard limit
+  _OfsSep = '|';         // page token separator: '<offset>|<path>'
   _StaleListMsg = 'Listing is outdated. Call /dir again';
 
   emj_FileFolder='📁';
@@ -336,14 +339,16 @@ end;
 
 procedure TShellThread.CallbackDir(const AToken: String);
 var
-  aPath: String;
+  aValue, aPath: String;
+  aOffset: Integer;
 begin
-  if not PathByToken(AToken, aPath) then
+  if not PathByToken(AToken, aValue) then
   begin
     FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
     Exit;
   end;
-  DirHandler(aPath);
+  SplitPageToken(aValue, aPath, aOffset);
+  DirHandler(aPath, aOffset);
 end;
 
 procedure TShellThread.CallbackFile(const AToken: String);
@@ -470,72 +475,94 @@ begin
     Result:=True;
 end;
 
-procedure TShellThread.DirHandler(const aPath: String);
+{ Page tokens keep the offset in front of the path: '<offset>|<path>'. An
+  absolute path never starts with '<digits>|', so the prefix is unambiguous }
+procedure TShellThread.SplitPageToken(const AValue: String; out APath: String;
+  out AOffset: Integer);
+var
+  p: Integer;
+begin
+  aPath:=AValue;
+  aOffset:=0;
+  p:=Pos(_OfsSep, AValue);
+  if p>0 then
+    if TryStrToInt(Copy(AValue, 1, p-1), aOffset) and (aOffset>=0) then
+      aPath:=Copy(AValue, p+1, MaxInt)
+    else
+      aOffset:=0;
+end;
+
+procedure TShellThread.DirHandler(const aPath: String; aOffset: Integer = 0);
 var
   s, aName, aDir, aParent: String;
-  aList: TStringList;
+  aDirs, aFiles: TStringList;
   aReplyMarkup: TReplyMarkup;
-  i, aAdded, aHidden: Integer;
+  aNavRow: TInlineKeyboardButtons;
+  i, aTotal, aPageEnd, aShown, aPrev: Integer;
 begin
   aDir:=IncludeTrailingPathDelimiter(aPath);
   // the current folder is tracked per chat: the '..' button and the upload
   // flow resolve it through tokens/per-chat state, never through message text
   SetChatDir(FBot.CurrentChatId, aDir);
   aReplyMarkup:=TReplyMarkup.Create;
-  aList:=TStringList.Create;
+  aDirs:=TStringList.Create;
+  aFiles:=TStringList.Create;
   try
     aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
-    aAdded:=0;
-    aHidden:=0;
     if aDir<>PathDelim then
     begin
       aParent:=IncludeTrailingPathDelimiter(ExtractFileDir(ExcludeTrailingPathDelimiter(aDir)));
       aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+'..',
         dt_dir+' '+AddPathRef(aParent));
-      Inc(aAdded);
     end;
-    FindAllDirectories(aList, aDir, False);
-    i:=0;
-    while i<aList.Count do
-    begin
-      if aAdded>=_MaxButtons then
+    FindAllDirectories(aDirs, aDir, False);
+    FindAllFiles(aFiles, aDir, EmptyStr, False);
+    aTotal:=aDirs.Count+aFiles.Count;
+    aPageEnd:=aOffset+_MaxButtons;
+    aShown:=0;
+    for i:=0 to aDirs.Count-1 do
+      if (i>=aOffset) and (i<aPageEnd) then
       begin
-        aHidden:=aHidden+aList.Count-i;
-        Break;
+        aName:=ExtractFileName(aDirs[i]);
+        aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+aName,
+          dt_dir+' '+AddPathRef(IncludeTrailingPathDelimiter(aDirs[i])), 2);
+        Inc(aShown);
       end;
-      aName:=ExtractFileName(aList[i]);
-      aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+aName,
-        dt_dir+' '+AddPathRef(IncludeTrailingPathDelimiter(aList[i])), 2);
-      Inc(aAdded);
-      Inc(i);
+    for i:=0 to aFiles.Count-1 do
+      if (aDirs.Count+i>=aOffset) and (aDirs.Count+i<aPageEnd) then
+      begin
+        aName:=ExtractFileName(aFiles[i]);
+        aReplyMarkup.InlineKeyBoard.AddButton(aName, dt_file+' '+AddPathRef(aFiles[i]), 2);
+        Inc(aShown);
+      end;
+    // prev/next page buttons share one row
+    aNavRow:=nil;
+    if aOffset>0 then
+    begin
+      aPrev:=aOffset-_MaxButtons;
+      if aPrev<0 then
+        aPrev:=0;
+      aNavRow:=aReplyMarkup.InlineKeyBoard.Add;
+      aNavRow.AddButton('◀️', dt_dir+' '+AddPathRef(IntToStr(aPrev)+_OfsSep+aDir));
     end;
-    aList.Clear;
-    FindAllFiles(aList, aDir, EmptyStr, False);
-    i:=0;
-    while i<aList.Count do
+    if aPageEnd<aTotal then
     begin
-      if aAdded>=_MaxButtons then
-      begin
-        aHidden:=aHidden+aList.Count-i;
-        Break;
-      end;
-      aName:=ExtractFileName(aList[i]);
-      aReplyMarkup.InlineKeyBoard.AddButton(aName, dt_file+' '+AddPathRef(aList[i]), 2);
-      Inc(aAdded);
-      Inc(i);
+      if not Assigned(aNavRow) then
+        aNavRow:=aReplyMarkup.InlineKeyBoard.Add;
+      aNavRow.AddButton('▶️', dt_dir+' '+AddPathRef(IntToStr(aPageEnd)+_OfsSep+aDir));
     end;
     aReplyMarkup.InlineKeyBoard.Add.AddButton('Upload...', dt_input+' '+AddPathRef(aDir));
-    if aHidden>0 then
-      s:=FormatPath(aDir)+LineEnding+Format('(+%d more entries not shown)', [aHidden])
-    else
-      s:=FormatPath(aDir);
+    s:=FormatPath(aDir);
+    if (aOffset>0) or (aPageEnd<aTotal) then
+      s+=LineEnding+Format('Entries %d-%d of %d', [aOffset+1, aOffset+aShown, aTotal]);
     if IsCallback then
       FBot.editMessageText(s, pmMarkdown, True, aReplyMarkup)
     else
       FBot.sendMessage(s, pmMarkdown, True, aReplyMarkup);
   finally
     aReplyMarkup.Free;
-    aList.Free;
+    aDirs.Free;
+    aFiles.Free;
   end;
 end;
 
