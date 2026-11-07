@@ -19,7 +19,8 @@ type
     FLogger: TEventLog;
     FBot: TTgShBot;
     FProc: TProcess;
-    FTerminated: Boolean;
+    FPaths: TStringList;   // callback token -> full path (dirs, files, scripts)
+    FRefSeq: Integer;      // monotonically growing token counter
     FLPTimeout: Integer;
     procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);  
     procedure BotReceiveDeleteCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
@@ -47,10 +48,12 @@ type
     {$ENDIF}
     procedure BotReceiveFileCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       {%H-}AMessage: TTelegramMessageObj); 
+    function AddPathRef(const APath: String): String;
     procedure CallbackDir(const aMessage, aName: String);
-    procedure CallbackFile(const aMessage, aName: String); 
+    procedure CallbackFile(const {%H-}aMessage, aName: String);
     procedure CallbackInput(const aMessage: String);
-    procedure CallbackScript(const aFileName: String);
+    procedure CallbackScript(const AToken: String);
+    function PathByToken(const AToken: String; out APath: String): Boolean;
     function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
     procedure DirHandler(const aPath: String);
@@ -89,6 +92,9 @@ const
   {%H-}SIGTRAP = 5;
 {$ENDIF}
   _ScriptFileExt='.script';
+  _MaxPathRefs = 1024;   // size of the callback token -> path ring map
+  _MaxButtons = 98;      // Telegram inline keyboard hard limit is 100 buttons
+  _StaleListMsg = 'Listing is outdated. Call /dir again';
 
   emj_FileFolder='📁';
   emj_Wrnng='⚠️';
@@ -147,9 +153,15 @@ end;
 
 function TShellThread.BotReceiveDocument(aDocument: TTelegramDocument; const aPath: String): Boolean;
 var
-  aFileID: String;
+  aFileID, aFileName: String;
 begin
   aFileID:=aDocument.FileID;
+  aFileName:=ExtractFileName(aDocument.FileName);
+  if (aFileName=EmptyStr) or (aFileName='.') or (aFileName='..') then
+  begin
+    Logger.Error('Unsafe file name "'+aDocument.FileName+'"');
+    Exit(False);
+  end;
   if not FBot.getFile(aFileID) then
   begin
     Logger.Error('Failed to get file by FileID "'+AFileID+'"');
@@ -159,9 +171,9 @@ begin
   begin
     Logger.Error('FileObject not Assigned! FileID: "'+AFileID+'"');
     Exit(False);
-  end; 
+  end;
   try
-    TFPHTTPClient.SimpleGet(FBot.FileObj.DownloadLink(FBot.Token), aPath+aDocument.FileName);
+    TFPHTTPClient.SimpleGet(FBot.FileObj.DownloadLink(FBot.Token), aPath+aFileName);
   except
     on E:Exception do
       Logger.Error(E.ClassName+': '+E.Message);
@@ -178,6 +190,7 @@ begin
   FBot.answerCallbackQuery(ACallback.ID);
   FIsCallBack:=True;
   aCmd:=ExtractWord(1, ACallback.Data, [' ']);
+  // aName is a token into FPaths ('dir 12', 'file 34', 'script 7') or '..'
   aName:=RightStr(ACallback.Data, Length(ACallback.Data)-Length(aCmd)-1);
   case aCmd of
     dt_script: CallbackScript(aName);
@@ -193,7 +206,9 @@ var
 begin
   if not CommandStart then
     Exit;
-  aPath:=ExtractDelimited(2, AMessage.Text, [' ']);
+  // everything after '/delete', markdown backticks stripped: paths with spaces survive
+  aPath:=Trim(StringReplace(Copy(AMessage.Text, Length('/'+dt_dlt)+1, MaxInt),
+    '`', EmptyStr, [rfReplaceAll]));
   if aPath.IsEmpty then
     FBot.sendMessage('Use command line format like /delete `/path-to-the-file/file-name.ext`', pmMarkdown)
   else
@@ -227,7 +242,7 @@ begin
     for f in aScriptFiles do
     begin
       aFile:=LazFileUtils.ExtractFileNameOnly(f);
-      aReplyMarkup.InlineKeyBoard.AddButton(aFile, dt_script+' '+aFile, 3);
+      aReplyMarkup.InlineKeyBoard.AddButton(aFile, dt_script+' '+AddPathRef(f), 3);
     end;
     if aScriptFiles.Count>0 then
       FBot.sendMessage('Select script to run', pmDefault, True, aReplyMarkup)
@@ -313,13 +328,22 @@ begin
   if aName='..' then
     aPath:=ExtractFileDir(ExcludeTrailingPathDelimiter(ParsePath(aMessage)))
   else
-    aPath:=ParsePath(aMessage)+aName;
+    if not PathByToken(aName, aPath) then
+    begin
+      FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+      Exit;
+    end;
   DirHandler(IncludeTrailingPathDelimiter(aPath));
 end;
 
 procedure TShellThread.CallbackFile(const aMessage, aName: String);
+var
+  aPath: String;
 begin
-  FileHandler(ParsePath(aMessage)+aName);
+  if PathByToken(aName, aPath) then
+    FileHandler(aPath)
+  else
+    FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
 end;
 
 procedure TShellThread.CallbackInput(const aMessage: String);
@@ -339,13 +363,45 @@ begin
   end;
 end;
 
-procedure TShellThread.CallbackScript(const aFileName: String);
+function TShellThread.AddPathRef(const APath: String): String;
+begin
+  Result:=IntToStr(FRefSeq);
+  Inc(FRefSeq);
+  FPaths.Values[Result]:=APath;
+  if FPaths.Count>_MaxPathRefs then
+    FPaths.Delete(0); // the oldest token has the smallest number
+end;
+
+function TShellThread.PathByToken(const AToken: String; out APath: String): Boolean;
 var
+  i: Integer;
+begin
+  i:=FPaths.IndexOfName(AToken);
+  if i>=0 then
+  begin
+    APath:=FPaths.ValueFromIndex[i];
+    Result:=True;
+  end
+  else
+  begin
+    APath:=EmptyStr;
+    Result:=False;
+  end;
+end;
+
+procedure TShellThread.CallbackScript(const AToken: String);
+var
+  aPath: String;
   aScript: TStringList;
 begin
+  if not PathByToken(AToken, aPath) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+    Exit;
+  end;
   aScript:=TStringList.Create;
   try
-    aScript.LoadFromFile(IncludeTrailingPathDelimiter(ExtractFileDir(Cnfg.ScriptsDirectory))+aFileName+_ScriptFileExt);
+    aScript.LoadFromFile(aPath);
     SendToShellTerminal(aScript.Text);
   finally
     aScript.Free;
@@ -355,7 +411,14 @@ end;
 function TShellThread.CommandStart: Boolean;
 begin
   FBot.UpdateProcessed:=True;  // There is no point in further processing
-  Result:=CheckIsAdmin and FProc.Running;
+  Result:=CheckIsAdmin;
+  if not Result then
+    Exit;
+  if not (Assigned(FProc) and FProc.Running) then
+  begin
+    FBot.sendMessage('Shell process is not running!');
+    Result:=False;
+  end;
 end;
 
 function TShellThread.CheckIsAdmin: Boolean;
@@ -372,31 +435,58 @@ var
   s, aName: String;
   aList: TStringList;
   aReplyMarkup: TReplyMarkup;
+  i, aAdded, aHidden: Integer;
 begin
   aReplyMarkup:=TReplyMarkup.Create;
   aList:=TStringList.Create;
   try
     aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
-    FindAllDirectories(aList, aPath, False);
+    aAdded:=0;
+    aHidden:=0;
     if aPath<>PathDelim then
-      aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+'..', dt_dir+' '+'..');
-    for s in aList do
     begin
-      aName:=ExtractFileName(s);
-      aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+aName, dt_dir+' '+aName, 2);
+      aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+'..', dt_dir+' '+'..');
+      aAdded:=1;
+    end;
+    FindAllDirectories(aList, aPath, False);
+    i:=0;
+    while i<aList.Count do
+    begin
+      if aAdded>=_MaxButtons then
+      begin
+        aHidden:=aHidden+aList.Count-i;
+        Break;
+      end;
+      aName:=ExtractFileName(aList[i]);
+      aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+aName,
+        dt_dir+' '+AddPathRef(IncludeTrailingPathDelimiter(aList[i])), 2);
+      Inc(aAdded);
+      Inc(i);
     end;
     aList.Clear;
     FindAllFiles(aList, aPath, EmptyStr, False);
-    for s in aList do
+    i:=0;
+    while i<aList.Count do
     begin
-      aName:=ExtractFileName(s);
-      aReplyMarkup.InlineKeyBoard.AddButton(aName, dt_file+' '+aName, 2);
+      if aAdded>=_MaxButtons then
+      begin
+        aHidden:=aHidden+aList.Count-i;
+        Break;
+      end;
+      aName:=ExtractFileName(aList[i]);
+      aReplyMarkup.InlineKeyBoard.AddButton(aName, dt_file+' '+AddPathRef(aList[i]), 2);
+      Inc(aAdded);
+      Inc(i);
     end;
     aReplyMarkup.InlineKeyBoard.Add.AddButton('Upload...', dt_input);
-    if IsCallback then
-      FBot.editMessageText(FormatPath(aPath), pmMarkdown, True, aReplyMarkup)
+    if aHidden>0 then
+      s:=FormatPath(aPath)+LineEnding+Format('(+%d more entries not shown)', [aHidden])
     else
-      FBot.sendMessage(FormatPath(aPath), pmMarkdown, True, aReplyMarkup);
+      s:=FormatPath(aPath);
+    if IsCallback then
+      FBot.editMessageText(s, pmMarkdown, True, aReplyMarkup)
+    else
+      FBot.sendMessage(s, pmMarkdown, True, aReplyMarkup);
   finally
     aReplyMarkup.Free;
     aList.Free;
@@ -481,12 +571,14 @@ constructor TShellThread.Create;
 begin
   inherited Create(True);
   FreeOnTerminate:=True;
+  FPaths:=TStringList.Create;   // callback token -> path map, must exist before handlers
+  FRefSeq:=0;
   TelegramAPI_URL:=Cnfg.APIEndPoint; // For Russian specific case
   FBot:=TTgShBot.Create(Cnfg.BotTooken);
   FBot.Logger:=Logger;
   if FBot.Token=EmptyStr then
   begin
-    Logger.Error('Please, specify bot token in telegram.ini!');
+    Logger.Error('Please, specify bot token in tgshd.ini!');
     Exit;
   end;
   FBot.HTTPProxyHost:=Cnfg.HTTPProxyHost;
@@ -510,22 +602,24 @@ begin
   FProc.Options := [poUsePipes, poStderrToOutPut, poNoConsole];
   FProc.Executable:={$IFDEF MSWINDOWS}'cmd'{$ELSE}'sh'{$ENDIF};
   FProc.Execute;
-  FTerminated:=False;
   FLPTimeout:=Cnfg.APITimeout;
 
   Logger.Info('Log started');
 end;
 
 destructor TShellThread.Destroy;
-begin 
+begin
   FreeAndNil(FProc);
   FreeAndNil(FBot);
+  FreeAndNil(FPaths);
   FreeAndNil(FLogger);
   inherited Destroy;
 end;
 
 procedure TShellThread.Execute;
 begin
+  if (not Assigned(FBot)) or (not Assigned(FProc)) then
+    Exit; // constructor exited early (e.g. empty bot token)
   try
     OutputStd;
     while not Terminated do
