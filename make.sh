@@ -11,6 +11,9 @@ EOF
 
 function priv_lazbuild
 (
+    # Refresh VersionInfo (src/tgshd.lpi) and the deb control Version from
+    # the git tag/describe (see make.ver.sh) before compiling
+    bash make.ver.sh 1>&2
     if ! (which lazbuild); then
         source '/etc/os-release'
         case ${ID:?} in
@@ -56,6 +59,8 @@ function priv_dpkg
         echo "Binary is missing: src/x86_64-linux/tgshd and ${STAGING_DIR}/usr/bin/tgshd (build it first: bash ${0} build)" >&2
         exit 1
     fi
+    # Refresh the deb control Version from the git tag/describe (see make.ver.sh)
+    bash make.ver.sh 1>&2
     find "${STAGING_DIR}" -type d -exec chmod 0755 {} +
     find "${STAGING_DIR}" -type f -exec chmod 0644 {} +
     find "${STAGING_DIR}/usr/bin" -type f -exec chmod 0755 {} +
