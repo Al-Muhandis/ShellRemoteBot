@@ -20,6 +20,7 @@ type
     FBot: TTgShBot;
     FProc: TProcess;
     FPaths: TStringList;   // callback token -> full path (dirs, files, scripts)
+    FChatDirs: TStringList; // chat id -> current folder (also the pending upload folder)
     FRefSeq: Integer;      // monotonically growing token counter
     FLPTimeout: Integer;
     procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);  
@@ -49,9 +50,9 @@ type
     procedure BotReceiveFileCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       {%H-}AMessage: TTelegramMessageObj); 
     function AddPathRef(const APath: String): String;
-    procedure CallbackDir(const aMessage, aName: String);
-    procedure CallbackFile(const {%H-}aMessage, aName: String);
-    procedure CallbackInput(const aMessage: String);
+    procedure CallbackDir(const AToken: String);
+    procedure CallbackFile(const AToken: String);
+    procedure CallbackInput(const AToken: String);
     procedure CallbackScript(const AToken: String);
     function PathByToken(const AToken: String; out APath: String): Boolean;
     function CommandStart: Boolean;
@@ -59,9 +60,10 @@ type
     procedure DirHandler(const aPath: String);
     procedure FileHandler(const aPath: String);
     class function FormatPath(const aPath: String): String;
+    function GetChatDir(AChatId: Int64; out ADir: String): Boolean;
     function GetLogger: TEventLog;
     procedure OutputStd(const NoOutput: String = '');
-    class function ParsePath(const aMessage: String): String;
+    procedure SetChatDir(AChatId: Int64; const ADir: String);
     procedure SendToShellTerminal(const InputString: String);
     {$IFDEF UNIX}procedure SendSIG(SigNumber: Byte);{$ENDIF}
     procedure SetLogger(AValue: TEventLog);
@@ -137,11 +139,15 @@ begin
     Exit;
   if Assigned(AMessage.ReplyToMessage) then
   begin
-    aPath:=ParsePath(AMessage.ReplyToMessage.Text);
-    if aPath.IsEmpty then
-      Exit;
+    // the upload folder is kept per chat (set by the Upload... button),
+    // no round-trip through the reply message text
     if Assigned(AMessage.Document) then
-      BotReceiveDocument(AMessage.Document, aPath);
+    begin
+      if GetChatDir(FBot.CurrentChatId, aPath) then
+        BotReceiveDocument(AMessage.Document, aPath)
+      else
+        FBot.sendMessage(emj_Wrnng+' No pending upload folder. Call /dir and press Upload...');
+    end;
     Exit;
   end;
   InputString:=AMessage.Text;
@@ -184,19 +190,26 @@ end;
 procedure TShellThread.BotReceiveCallbackQuery(ASender: TObject; ACallback: TCallbackQueryObj);
 var
   aName, aCmd: String;
+  p: Integer;
 begin
   if not CommandStart then
     Exit;
   FBot.answerCallbackQuery(ACallback.ID);
   FIsCallBack:=True;
-  aCmd:=ExtractWord(1, ACallback.Data, [' ']);
-  // aName is a token into FPaths ('dir 12', 'file 34', 'script 7') or '..'
-  aName:=RightStr(ACallback.Data, Length(ACallback.Data)-Length(aCmd)-1);
+  aCmd:=ACallback.Data;
+  aName:=EmptyStr;
+  p:=Pos(' ', aCmd);
+  if p>0 then
+  begin
+    aName:=Copy(aCmd, p+1, MaxInt);
+    aCmd:=Copy(aCmd, 1, p-1);
+  end;
+  // aName is a token into FPaths ('dir 12', 'file 34', 'script 7', 'input 42')
   case aCmd of
     dt_script: CallbackScript(aName);
-    dt_dir:    CallbackDir(ACallback.Message.Text, aName);
-    dt_file:   CallbackFile(ACallback.Message.Text, aName);
-    dt_input:  CallbackInput(ACallback.Message.Text);
+    dt_dir:    CallbackDir(aName);
+    dt_file:   CallbackFile(aName);
+    dt_input:  CallbackInput(aName);
   end;
 end;
 
@@ -321,37 +334,42 @@ begin
   DirHandler(aPath);
 end;
 
-procedure TShellThread.CallbackDir(const aMessage, aName: String);
+procedure TShellThread.CallbackDir(const AToken: String);
 var
   aPath: String;
 begin
-  if aName='..' then
-    aPath:=ExtractFileDir(ExcludeTrailingPathDelimiter(ParsePath(aMessage)))
-  else
-    if not PathByToken(aName, aPath) then
-    begin
-      FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
-      Exit;
-    end;
-  DirHandler(IncludeTrailingPathDelimiter(aPath));
+  if not PathByToken(AToken, aPath) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+    Exit;
+  end;
+  DirHandler(aPath);
 end;
 
-procedure TShellThread.CallbackFile(const aMessage, aName: String);
+procedure TShellThread.CallbackFile(const AToken: String);
 var
   aPath: String;
 begin
-  if PathByToken(aName, aPath) then
+  if PathByToken(AToken, aPath) then
     FileHandler(aPath)
   else
     FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
 end;
 
-procedure TShellThread.CallbackInput(const aMessage: String);
+procedure TShellThread.CallbackInput(const AToken: String);
 var
   aReplyMarkup: TReplyMarkup;
   aPath, aMsg: String;
 begin
-  aPath:=ParsePath(aMessage);
+  if not PathByToken(AToken, aPath) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+    Exit;
+  end;
+  aPath:=IncludeTrailingPathDelimiter(aPath);
+  // remember the pending upload folder instead of parsing it later
+  // from the reply message text
+  SetChatDir(FBot.CurrentChatId, aPath);
   aMsg:=FormatPath(aPath)+LineEnding;
   aMsg+='Upload file to the folder '+aPath;
   aReplyMarkup:=TReplyMarkup.Create;
@@ -385,6 +403,28 @@ begin
   else
   begin
     APath:=EmptyStr;
+    Result:=False;
+  end;
+end;
+
+procedure TShellThread.SetChatDir(AChatId: Int64; const ADir: String);
+begin
+  FChatDirs.Values[IntToStr(AChatId)]:=ADir;
+end;
+
+function TShellThread.GetChatDir(AChatId: Int64; out ADir: String): Boolean;
+var
+  i: Integer;
+begin
+  i:=FChatDirs.IndexOfName(IntToStr(AChatId));
+  if i>=0 then
+  begin
+    ADir:=FChatDirs.ValueFromIndex[i];
+    Result:=True;
+  end
+  else
+  begin
+    ADir:=EmptyStr;
     Result:=False;
   end;
 end;
@@ -432,23 +472,29 @@ end;
 
 procedure TShellThread.DirHandler(const aPath: String);
 var
-  s, aName: String;
+  s, aName, aDir, aParent: String;
   aList: TStringList;
   aReplyMarkup: TReplyMarkup;
   i, aAdded, aHidden: Integer;
 begin
+  aDir:=IncludeTrailingPathDelimiter(aPath);
+  // the current folder is tracked per chat: the '..' button and the upload
+  // flow resolve it through tokens/per-chat state, never through message text
+  SetChatDir(FBot.CurrentChatId, aDir);
   aReplyMarkup:=TReplyMarkup.Create;
   aList:=TStringList.Create;
   try
     aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
     aAdded:=0;
     aHidden:=0;
-    if aPath<>PathDelim then
+    if aDir<>PathDelim then
     begin
-      aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+'..', dt_dir+' '+'..');
-      aAdded:=1;
+      aParent:=IncludeTrailingPathDelimiter(ExtractFileDir(ExcludeTrailingPathDelimiter(aDir)));
+      aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+'..',
+        dt_dir+' '+AddPathRef(aParent));
+      Inc(aAdded);
     end;
-    FindAllDirectories(aList, aPath, False);
+    FindAllDirectories(aList, aDir, False);
     i:=0;
     while i<aList.Count do
     begin
@@ -464,7 +510,7 @@ begin
       Inc(i);
     end;
     aList.Clear;
-    FindAllFiles(aList, aPath, EmptyStr, False);
+    FindAllFiles(aList, aDir, EmptyStr, False);
     i:=0;
     while i<aList.Count do
     begin
@@ -478,11 +524,11 @@ begin
       Inc(aAdded);
       Inc(i);
     end;
-    aReplyMarkup.InlineKeyBoard.Add.AddButton('Upload...', dt_input);
+    aReplyMarkup.InlineKeyBoard.Add.AddButton('Upload...', dt_input+' '+AddPathRef(aDir));
     if aHidden>0 then
-      s:=FormatPath(aPath)+LineEnding+Format('(+%d more entries not shown)', [aHidden])
+      s:=FormatPath(aDir)+LineEnding+Format('(+%d more entries not shown)', [aHidden])
     else
-      s:=FormatPath(aPath);
+      s:=FormatPath(aDir);
     if IsCallback then
       FBot.editMessageText(s, pmMarkdown, True, aReplyMarkup)
     else
@@ -537,19 +583,6 @@ begin
   end; }
 end;
 
-class function TShellThread.ParsePath(const aMessage: String): String;
-var
-  aStart, aFinish: Integer;
-begin
-  Result:=EmptyStr;
-  aStart:=Pos(emj_FileFolder+' ', aMessage);
-  if aStart=0 then Exit;
-  Inc(aStart, Length(emj_FileFolder)+1);
-  aFinish:=PosEx(' '+emj_FileFolder, aMessage, aStart);
-  if aFinish=0 then Exit;
-  Result:=IncludeTrailingPathDelimiter(Copy(aMessage, aStart, aFinish-aStart));
-end;
-
 procedure TShellThread.SendToShellTerminal(const InputString: String);
 begin
   OutputStd;
@@ -572,6 +605,7 @@ begin
   inherited Create(True);
   FreeOnTerminate:=True;
   FPaths:=TStringList.Create;   // callback token -> path map, must exist before handlers
+  FChatDirs:=TStringList.Create; // chat id -> current folder map
   FRefSeq:=0;
   TelegramAPI_URL:=Cnfg.APIEndPoint; // For Russian specific case
   FBot:=TTgShBot.Create(Cnfg.BotTooken);
@@ -612,6 +646,7 @@ begin
   FreeAndNil(FProc);
   FreeAndNil(FBot);
   FreeAndNil(FPaths);
+  FreeAndNil(FChatDirs);
   FreeAndNil(FLogger);
   inherited Destroy;
 end;
