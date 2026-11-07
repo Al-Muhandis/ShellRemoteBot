@@ -22,7 +22,6 @@ function priv_lazbuild
     fi
     if [[ -f 'use/components.txt' ]]; then
         git submodule update --init --recursive
-        git submodule update --recursive --remote
         while read -r; do
             if [[ -n "${REPLY}" ]] &&
                 ! (lazbuild --verbose-pkgsearch "${REPLY}") &&
@@ -48,11 +47,19 @@ function priv_dpkg
     # Linux shell script to create .deb package
     # Go to the repository local folder. For example, cd /home/User/ShellRemoteBot
     declare -r STAGING_DIR=./deb.staging
+    if [[ ! -f "${STAGING_DIR}/usr/bin/tgshd" ]]; then
+        echo "Binary is missing: ${STAGING_DIR}/usr/bin/tgshd (build it first: bash ${0} build)" >&2
+        exit 1
+    fi
     find "${STAGING_DIR}" -type d -exec chmod 0755 {} +
     find "${STAGING_DIR}" -type f -exec chmod 0644 {} +
     find "${STAGING_DIR}/usr/bin" -type f -exec chmod 0755 {} +
+    find "${STAGING_DIR}/DEBIAN" -maxdepth 1 -type f ! -name conffiles ! -name control -exec chmod 0755 {} +
+    sed --in-place '/^Installed-Size:/d' "${STAGING_DIR}/DEBIAN/control"
     echo "Installed-Size: $(du -s ${STAGING_DIR} | awk '{print $1;}')" >>"${STAGING_DIR}/DEBIAN/control"
-    gzip -9 -n 'deb.staging/usr/share/doc/tgshd/changelog.Debian'
+    if [[ ! -f 'deb.staging/usr/share/doc/tgshd/changelog.Debian.gz' ]]; then
+        gzip -9 -n 'deb.staging/usr/share/doc/tgshd/changelog.Debian'
+    fi
     read -rp "Input package filename: "
     dpkg-deb --root-owner-group --build "${STAGING_DIR}" "${REPLY}.deb"
 )

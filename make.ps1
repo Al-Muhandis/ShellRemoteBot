@@ -49,11 +49,10 @@ Function Build-Project {
     }
     If ( Test-Path -Path 'use\components.txt' ) {
         & git submodule update --recursive --init | Out-Host
-        & git submodule update --recursive --remote | Out-Host
         Get-Content -Path 'use\components.txt' | ForEach-Object {
             If ((-not (& lazbuild --verbose-pkgsearch $_ | Out-Null)) -and
                 (-not (& lazbuild --add-package $_ | Out-Null)) -and
-                (-not (Test-Path -Path 'use\components.txt'))) {
+                (-not (Test-Path -Path "use\$($_)"))) {
                     $OutFile = Request-File "https://packages.lazarus-ide.org/$($_).zip"
                     Expand-Archive -Path $OutFile -DestinationPath "use\$($_)" -Force
                     Remove-Item $OutFile
