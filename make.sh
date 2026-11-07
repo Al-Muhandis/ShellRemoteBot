@@ -46,9 +46,14 @@ function priv_dpkg
 (
     # Linux shell script to create .deb package
     # Go to the repository local folder. For example, cd /home/User/ShellRemoteBot
+    # Package filename is taken from ${1}; without it it is requested
+    # interactively (the argument form is meant for non-interactive CI).
     declare -r STAGING_DIR=./deb.staging
-    if [[ ! -f "${STAGING_DIR}/usr/bin/tgshd" ]]; then
-        echo "Binary is missing: ${STAGING_DIR}/usr/bin/tgshd (build it first: bash ${0} build)" >&2
+    if [[ -f 'src/x86_64-linux/tgshd' ]]; then
+        cp --force 'src/x86_64-linux/tgshd' "${STAGING_DIR}/usr/bin/tgshd"
+        echo "Staged binary: src/x86_64-linux/tgshd -> ${STAGING_DIR}/usr/bin/tgshd" 1>&2
+    elif [[ ! -f "${STAGING_DIR}/usr/bin/tgshd" ]]; then
+        echo "Binary is missing: src/x86_64-linux/tgshd and ${STAGING_DIR}/usr/bin/tgshd (build it first: bash ${0} build)" >&2
         exit 1
     fi
     find "${STAGING_DIR}" -type d -exec chmod 0755 {} +
@@ -60,8 +65,13 @@ function priv_dpkg
     if [[ ! -f 'deb.staging/usr/share/doc/tgshd/changelog.Debian.gz' ]]; then
         gzip -9 -n 'deb.staging/usr/share/doc/tgshd/changelog.Debian'
     fi
-    read -rp "Input package filename: "
-    dpkg-deb --root-owner-group --build "${STAGING_DIR}" "${REPLY}.deb"
+    declare PACKAGE_NAME="${1:-}"
+    if [[ -z "${PACKAGE_NAME}" ]]; then
+        read -rp "Input package filename: " PACKAGE_NAME ||
+            { echo "Package filename required for non-interactive runs: bash ${0} dpkg <filename>" >&2; exit 1; }
+    fi
+    [[ "${PACKAGE_NAME}" == *.deb ]] || PACKAGE_NAME+='.deb'
+    dpkg-deb --root-owner-group --build "${STAGING_DIR}" "${PACKAGE_NAME}" 1>&2
 )
 
 function priv_main
@@ -70,7 +80,7 @@ function priv_main
     if ((${#})); then
         case ${1} in
             build) priv_lazbuild ;;
-            dpkg) priv_dpkg ;;
+            dpkg) priv_dpkg "${@:2}" ;;
             *) priv_clippit ;;
         esac
     else
