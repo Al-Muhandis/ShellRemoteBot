@@ -55,7 +55,7 @@ Function Initialize-Lazbuild {
     }
 }
 
-Function Register-Packages {
+Function Register-Package {
     If ( Test-Path -Path 'use\components.txt' ) {
         & git submodule update --recursive --init | Out-Host
         Get-Content -Path 'use\components.txt' | ForEach-Object {
@@ -67,7 +67,7 @@ Function Register-Packages {
                     Remove-Item $OutFile
                 }
         }
-        Get-ChildItem -Filter '*.lpk' -Recurse -File –Path 'use' | ForEach-Object {
+        Get-ChildItem -Filter '*.lpk' -Recurse -File -Path 'use' | ForEach-Object {
             & lazbuild --add-package-link $_ | Out-Host
         }
     }
@@ -75,15 +75,15 @@ Function Register-Packages {
 
 Function Build-Project {
     Initialize-Lazbuild
-    Register-Packages
-    Get-ChildItem -Filter '*.lpi' -Recurse -File –Path 'src' | ForEach-Object {
+    Register-Package
+    Get-ChildItem -Filter '*.lpi' -Recurse -File -Path 'src' | ForEach-Object {
         & lazbuild --no-write-project --recursive --build-mode=release $_ | Out-Host
     }
 }
 
 Function Test-Project {
     Initialize-Lazbuild
-    Register-Packages
+    Register-Package
     & lazbuild --no-write-project tests\tgshdtests.lpi | Out-Host
     & .\tests\tgshdtests.exe --all --format=plain | Out-Host
     If ($LASTEXITCODE -ne 0) {
