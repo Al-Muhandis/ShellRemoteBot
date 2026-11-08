@@ -11,9 +11,9 @@ uses
 
 type
 
-  { TTestConfigUsers }
+  { TTestConfig }
 
-  TTestConfigUsers = class(TTestCase)
+  TTestConfig = class(TTestCase)
   private
     { Writes AContent into a fresh ini file and returns its full path }
     function WriteIni(const AContent: String): String;
@@ -26,11 +26,14 @@ type
     procedure TestUnknownStatusIsSimple;
     procedure TestMissingUserIsSimple;
     procedure TestOnlyFirstCharacterCounts;
+    procedure TestSilentForNonAdminsDefault;
+    procedure TestSilentForNonAdminsEnabled;
+    procedure TestSilentForNonAdminsNumericOne;
   end;
 
 implementation
 
-function TTestConfigUsers.WriteIni(const AContent: String): String;
+function TTestConfig.WriteIni(const AContent: String): String;
 var
   L: TStringList;
 begin
@@ -47,7 +50,7 @@ begin
   end;
 end;
 
-procedure TTestConfigUsers.DoTest(const AUsersSection: String; AUserID: Int64;
+procedure TTestConfig.DoTest(const AUsersSection: String; AUserID: Int64;
   AExpected: TUserStatus);
 var
   Cfg: TConfig;
@@ -67,40 +70,96 @@ begin
   end;
 end;
 
-procedure TTestConfigUsers.TestAdminStatus;
+procedure TTestConfig.TestAdminStatus;
 begin
   DoTest('[users]'+LineEnding+'111=a'+LineEnding, 111, usAdmin);
 end;
 
-procedure TTestConfigUsers.TestBannedStatus;
+procedure TTestConfig.TestBannedStatus;
 begin
   DoTest('[users]'+LineEnding+'222=b'+LineEnding, 222, usBanned);
 end;
 
-procedure TTestConfigUsers.TestSimpleStatus;
+procedure TTestConfig.TestSimpleStatus;
 begin
   DoTest('[users]'+LineEnding+'333=s'+LineEnding, 333, usSimple);
 end;
 
-procedure TTestConfigUsers.TestUnknownStatusIsSimple;
+procedure TTestConfig.TestUnknownStatusIsSimple;
 begin
   // an unrecognized status character must never grant admin rights
   DoTest('[users]'+LineEnding+'444=x'+LineEnding, 444, usSimple);
 end;
 
-procedure TTestConfigUsers.TestMissingUserIsSimple;
+procedure TTestConfig.TestMissingUserIsSimple;
 begin
   // users absent from the list are simple, not admins
   DoTest('[users]'+LineEnding+'111=a'+LineEnding, 999, usSimple);
 end;
 
-procedure TTestConfigUsers.TestOnlyFirstCharacterCounts;
+procedure TTestConfig.TestOnlyFirstCharacterCounts;
 begin
   // GetUsers decides by the first character of the value only
   DoTest('[users]'+LineEnding+'555=abc'+LineEnding, 555, usAdmin);
 end;
 
+procedure TTestConfig.TestSilentForNonAdminsDefault;
+var
+  Cfg: TConfig;
+  Path: String;
+begin
+  // absent option keeps the historical behavior: answer non-admin users
+  Path:=WriteIni('[users]'+LineEnding+'111=a'+LineEnding);
+  try
+    Cfg:=TConfig.Create(Path);
+    try
+      AssertFalse(Cfg.SilentForNonAdmins);
+    finally
+      Cfg.Free;
+    end;
+  finally
+    DeleteFileUTF8(Path);
+  end;
+end;
+
+procedure TTestConfig.TestSilentForNonAdminsEnabled;
+var
+  Cfg: TConfig;
+  Path: String;
+begin
+  Path:=WriteIni('[users]'+LineEnding+'SilentForNonAdmins=true'+LineEnding);
+  try
+    Cfg:=TConfig.Create(Path);
+    try
+      AssertTrue(Cfg.SilentForNonAdmins);
+    finally
+      Cfg.Free;
+    end;
+  finally
+    DeleteFileUTF8(Path);
+  end;
+end;
+
+procedure TTestConfig.TestSilentForNonAdminsNumericOne;
+var
+  Cfg: TConfig;
+  Path: String;
+begin
+  // '1' is the spelling FPC ReadBool itself accepts
+  Path:=WriteIni('[users]'+LineEnding+'SilentForNonAdmins=1'+LineEnding);
+  try
+    Cfg:=TConfig.Create(Path);
+    try
+      AssertTrue(Cfg.SilentForNonAdmins);
+    finally
+      Cfg.Free;
+    end;
+  finally
+    DeleteFileUTF8(Path);
+  end;
+end;
+
 initialization
-  RegisterTest(TTestConfigUsers);
+  RegisterTest(TTestConfig);
 
 end.

@@ -457,9 +457,10 @@ function TShellThread.CheckIsAdmin: Boolean;
 begin
   Result:=FBot.CurrentIsAdminUser;
   if not Result then
-    FBot.sendMessage('You cannot access to this bot!')
-  else
-    Result:=True;
+    // banned users are always ignored by the sender; a simple user gets the
+    // answer unless the config opts out of revealing the bot existence at all
+    if not Cnfg.SilentForNonAdmins then
+      FBot.sendMessage('You cannot access to this bot!');
 end;
 
 { Page tokens keep the offset in front of the path: '<offset>|<path>'. An

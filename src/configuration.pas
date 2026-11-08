@@ -26,6 +26,7 @@ type
     function GetHTTPProxyUser: String;
     function GetScriptsDirectory: String;
     function GetServiceUser: Int64;
+    function GetSilentForNonAdmins: Boolean;
     function GetUsers(UserID: Int64): TUserStatus;
     function GetUserList: TStrings;
   public
@@ -35,6 +36,9 @@ type
     property APIEndPoint: String read GetAPIEndPoint;
     property BotTooken: String read GetBotTooken;
     property Users[UserID: Int64]: TUserStatus read GetUsers;
+    { true: non-admin users are not answered at all, so the bot does not
+      reveal its existence (banned users are always ignored) }
+    property SilentForNonAdmins: Boolean read GetSilentForNonAdmins;
     property APITimeout: Integer read GetAPITimeout; // longpolling timeout
     property HTTPProxyHost: String read GetHTTPProxyHost;
     property HTTPProxyPort: Word read GetHTTPProxyPort;
@@ -106,6 +110,16 @@ end;
 function TConfig.GetServiceUser: Int64;
 begin
   Result:=FIni.ReadInt64('Service', 'User', 0);
+end;
+
+function TConfig.GetSilentForNonAdmins: Boolean;
+var
+  s: String;
+begin
+  // FPC ReadBool understands '1' only (CharToBool), so parse the common
+  // spellings explicitly; anything else (or absent) keeps bots answering
+  s:=Lowercase(FIni.ReadString('Users', 'SilentForNonAdmins', EmptyStr));
+  Result:=(s='1') or (s='true') or (s='yes') or (s='on');
 end;
 
 function TConfig.GetUsers(UserID: Int64): TUserStatus;
