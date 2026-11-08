@@ -6,14 +6,14 @@ function priv_clippit
 Usage: bash ${0} [OPTIONS]
 Options:
     build   Build program
+    test    Build and run the FPCUnit test suite
 EOF
 )
 
-function priv_lazbuild
+function priv_setup
 (
-    # Refresh VersionInfo (src/tgshd.lpi) and the deb control Version from
-    # the git tag/describe (see make.ver.sh) before compiling
-    bash make.ver.sh 1>&2
+    # Make sure lazbuild is available and the vendored component packages
+    # (use/*.lpk) are registered, so any project .lpi can be built
     if ! (which lazbuild); then
         source '/etc/os-release'
         case ${ID:?} in
@@ -39,10 +39,27 @@ function priv_lazbuild
                     rm --verbose "${VAR[out]}"
                 fi
         done < 'use/components.txt'
-        find 'use' -type 'f' -name '*.lpk' -exec lazbuild --add-package-link {} +
+        find 'use' -type 'f' -name '*.lpk' -exec lazbuild --add-package-link {} + 1>&2
     fi
+)
+
+function priv_lazbuild
+(
+    # Refresh VersionInfo (src/tgshd.lpi) and the deb control Version from
+    # the git tag/describe (see make.ver.sh) before compiling
+    bash make.ver.sh 1>&2
+    priv_setup
     find 'src' -type 'f' -name '*.lpi' \
         -exec lazbuild --no-write-project --recursive --no-write-project --build-mode=release {} + 1>&2
+)
+
+function priv_test
+(
+    # Build the FPCUnit console suite (tests/tgshdtests.lpi) and run it:
+    # the runner exits non-zero when any test fails or errors
+    priv_setup
+    lazbuild --no-write-project tests/tgshdtests.lpi 1>&2
+    tests/tgshdtests --all --format=plain 1>&2
 )
 
 function priv_dpkg
@@ -85,6 +102,7 @@ function priv_main
     if ((${#})); then
         case ${1} in
             build) priv_lazbuild ;;
+            test) priv_test ;;
             dpkg) priv_dpkg "${@:2}" ;;
             *) priv_clippit ;;
         esac

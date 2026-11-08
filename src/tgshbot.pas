@@ -29,6 +29,13 @@ type
 
 function IsolateShellOutput(const S: String): String;
 
+{ Splits AMessage into parts of at most APartLength UTF-8 characters, never
+  cutting inside a multibyte character: a byte cut would produce invalid
+  UTF-8 and Telegram rejects such messages. The concatenation of the parts
+  reproduces AMessage exactly; an empty message produces no parts.
+  APartLength must be positive. }
+procedure SplitUTF8Parts(const AMessage: String; APartLength: Integer; AParts: TStrings);
+
 implementation
 
 uses
@@ -41,6 +48,21 @@ begin
   // whole message would be rejected by Telegram: break it with zero-width space
   Result:='```log'+LineEnding+
     StringReplace(S, '```', '``'+#$E2#$80#$8B+'`', [rfReplaceAll])+LineEnding+'```';
+end;
+
+procedure SplitUTF8Parts(const AMessage: String; APartLength: Integer;
+  AParts: TStrings);
+var
+  MsgRest: String;
+begin
+  if APartLength<1 then
+    raise EArgumentException.Create('Part length must be positive');
+  MsgRest:=AMessage;
+  while MsgRest<>EmptyStr do
+  begin
+    AParts.Add(UTF8Copy(MsgRest, 1, APartLength));
+    MsgRest:=UTF8Copy(MsgRest, APartLength+1, MaxInt);
+  end;
 end;
 
 { TTgShBot }
@@ -58,7 +80,9 @@ end;
 function TTgShBot.sendMessageCode(const AMessage: String;
   ReplyMarkup: TReplyMarkup): Boolean;
 var
-  Msg, MsgRest: String;
+  Msg: String;
+  Parts: TStringList;
+  i: Integer;
 const
   MaxMsgLength = 4096;   // Maximum message length to send
   MsgPartLength = 3500;  // Length of one message part for the splitting (UTF-8 characters)
@@ -70,15 +94,16 @@ begin
     if Length(Msg)<MaxMsgLength then
       Result:=sendMessageSafe(Msg, pmMarkdown, False, ReplyMarkup)
     else begin
-      MsgRest:=AMessage;
-      while MsgRest<>EmptyStr do
-      begin
-        // split on character boundaries: a byte cut may break a multibyte
-        // character and Telegram rejects invalid UTF-8
-        Msg:=UTF8Copy(MsgRest, 1, MsgPartLength);
-        MsgRest:=UTF8Copy(MsgRest, MsgPartLength+1, MaxInt);
-        Result:=sendMessageSafe(IsolateShellOutput(Msg), pmMarkdown, False, ReplyMarkup);
-        Sleep(300);
+      Parts:=TStringList.Create;
+      try
+        SplitUTF8Parts(AMessage, MsgPartLength, Parts);
+        for i:=0 to Parts.Count-1 do
+        begin
+          Result:=sendMessageSafe(IsolateShellOutput(Parts[i]), pmMarkdown, False, ReplyMarkup);
+          Sleep(300);
+        end;
+      finally
+        Parts.Free;
       end;
     end;
   end;

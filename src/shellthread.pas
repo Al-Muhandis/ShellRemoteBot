@@ -5,7 +5,8 @@ unit shellthread;
 interface
 
 uses
-  Classes, SysUtils, tgtypes, tgsendertypes, process, eventlog, tgshbot, UTF8Process
+  Classes, SysUtils, tgtypes, tgsendertypes, process, eventlog, tgshbot,
+  pathrefs, UTF8Process
   {$IFDEF MSWINDOWS}, Windows{$ENDIF}
   {$IFDEF UNIX}, BaseUnix{$ENDIF}
   ;
@@ -20,9 +21,8 @@ type
     FLogger: TEventLog;
     FBot: TTgShBot;
     FProc: TProcess;
-    FPaths: TStringList;   // callback token -> full path (dirs, files, scripts)
+    FPaths: TPathRefs;     // callback token -> full path (dirs, files, scripts)
     FChatDirs: TStringList; // chat id -> current folder (also the pending upload folder)
-    FRefSeq: Integer;      // monotonically growing token counter
     FLPTimeout: Integer;
     FShellOwnGroup: Boolean; // the shell leads its own process group (safe to killpg)
     procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);  
@@ -99,7 +99,6 @@ const
   {%H-}SIGTRAP = 5;
 {$ENDIF}
   _ScriptFileExt='.script';
-  _MaxPathRefs = 1024;   // size of the callback token -> path ring map
   _MaxButtons = 90;      // entries per /dir page: '..' + prev/next + Upload
                          // must also fit into the 100-button Telegram hard limit
   _OfsSep = '|';         // page token separator: '<offset>|<path>'
@@ -392,28 +391,12 @@ end;
 
 function TShellThread.AddPathRef(const APath: String): String;
 begin
-  Result:=IntToStr(FRefSeq);
-  Inc(FRefSeq);
-  FPaths.Values[Result]:=APath;
-  if FPaths.Count>_MaxPathRefs then
-    FPaths.Delete(0); // the oldest token has the smallest number
+  Result:=FPaths.Add(APath);
 end;
 
 function TShellThread.PathByToken(const AToken: String; out APath: String): Boolean;
-var
-  i: Integer;
 begin
-  i:=FPaths.IndexOfName(AToken);
-  if i>=0 then
-  begin
-    APath:=FPaths.ValueFromIndex[i];
-    Result:=True;
-  end
-  else
-  begin
-    APath:=EmptyStr;
-    Result:=False;
-  end;
+  Result:=FPaths.Find(AToken, APath);
 end;
 
 procedure TShellThread.SetChatDir(AChatId: Int64; const ADir: String);
@@ -703,9 +686,8 @@ constructor TShellThread.Create;
 begin
   inherited Create(True);
   FreeOnTerminate:=True;
-  FPaths:=TStringList.Create;   // callback token -> path map, must exist before handlers
+  FPaths:=TPathRefs.Create;     // callback token -> path ring, must exist before handlers
   FChatDirs:=TStringList.Create; // chat id -> current folder map
-  FRefSeq:=0;
   TelegramAPI_URL:=Cnfg.APIEndPoint; // For Russian specific case
   FBot:=TTgShBot.Create(Cnfg.BotTooken);
   FBot.Logger:=Logger;

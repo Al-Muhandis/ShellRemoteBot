@@ -6,6 +6,7 @@ Function Show-Usage {
 Usage: pwsh -File $($PSCommandPath) [OPTIONS]
 Options:
     build   Build program
+    test    Build and run the FPCUnit test suite
 "
 }
 
@@ -34,19 +35,27 @@ Function Install-Program {
     }
 }
 
-Function Build-Project {
+Function Initialize-Lazbuild {
     $VAR = @{
         Cmd = 'lazbuild'
         Url = 'https://netix.dl.sourceforge.net/project/lazarus/Lazarus%20Windows%2064%20bits/Lazarus%203.6/lazarus-3.6-fpc-3.2.2-win64.exe?viasf=1'
         Path = "C:\Lazarus"
     }
+    # A previous process (e.g. the CI build step) may have installed Lazarus
+    # already: its PATH change does not survive, so re-add the install folder
+    If ( Test-Path -Path "$($VAR.Path)\$($VAR.Cmd).exe" ) {
+        $env:PATH+=";$($VAR.Path)"
+    }
     Try {
-        Get-Command $VAR.Cmd
+        Get-Command $VAR.Cmd | Out-Null
     } Catch {
         Request-File $VAR.Url | Install-Program
         $env:PATH+=";$($VAR.Path)"
-        Get-Command $VAR.Cmd
+        Get-Command $VAR.Cmd | Out-Null
     }
+}
+
+Function Register-Packages {
     If ( Test-Path -Path 'use\components.txt' ) {
         & git submodule update --recursive --init | Out-Host
         Get-Content -Path 'use\components.txt' | ForEach-Object {
@@ -62,8 +71,23 @@ Function Build-Project {
             & lazbuild --add-package-link $_ | Out-Host
         }
     }
+}
+
+Function Build-Project {
+    Initialize-Lazbuild
+    Register-Packages
     Get-ChildItem -Filter '*.lpi' -Recurse -File –Path 'src' | ForEach-Object {
         & lazbuild --no-write-project --recursive --build-mode=release $_ | Out-Host
+    }
+}
+
+Function Test-Project {
+    Initialize-Lazbuild
+    Register-Packages
+    & lazbuild --no-write-project tests\tgshdtests.lpi | Out-Host
+    & .\tests\tgshdtests.exe --all --format=plain | Out-Host
+    If ($LASTEXITCODE -ne 0) {
+        Throw "FPCUnit tests failed with exit code $LASTEXITCODE"
     }
 }
 
@@ -75,6 +99,9 @@ Function Switch-Action {
         Switch ($args[0]) {
             'build' {
                 Build-Project
+            }
+            'test' {
+                Test-Project
             }
             Default {
                 Show-Usage

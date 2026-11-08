@@ -42,7 +42,7 @@ tests/lib/
 x86_64-linux/
 
 # Binary
-tests/console
+tests/tgshdtests
 /tgshd
 src/tgshd
 deb.staging/usr/bin/tgshd

@@ -39,6 +39,11 @@ jobs:
         bash -x make.sh build
         bash make.sh dpkg "tgshd_$(bash make.ver.sh)_amd64"
 
+    - name: Run tests on Linux
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash -x make.sh test
+
     - name: Upload Linux artifacts
       if: runner.os == 'Linux'
       uses: actions/upload-artifact@v4
@@ -55,6 +60,11 @@ jobs:
       run: |
         bash make.ver.sh
         pwsh -File make.ps1 build
+
+    - name: Run tests on Windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: pwsh -File make.ps1 test
 
     - name: Upload Windows artifact
       if: runner.os == 'Windows'
