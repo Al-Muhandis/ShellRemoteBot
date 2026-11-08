@@ -19,6 +19,10 @@ You can call the file manager by `/dir` command then select directory inline but
 
 You can set the default value in the configuration file (`DefaultDir` in `[File]` section)
 
+Big folders are split into pages navigated with the ◀️ / ▶️ buttons (90 entries per page). The `Upload...` button marks the folder as the upload destination: send a document as a reply to that bot message and it is saved into the folder.
+
+The inline buttons keep temporary references to the listed paths, they do not survive a bot restart: after an upgrade an old listing answers `Listing is outdated. Call /dir again` and you simply call `/dir` again.
+
 ## Installation
 
 1. Create bot https://core.telegram.org/bots/#3-how-do-i-create-a-bot . You must select (keep default) longpolling method for getting updates.
@@ -30,14 +34,16 @@ You can set the default value in the configuration file (`DefaultDir` in `[File]
 Token=
 ;; Actual if telegram server is blocked in server/computer region
 Endpoint=https://api.telegram.org/bot
-;; Timeout for lognpolling requests while getting updates
+;; Timeout for longpolling requests while getting updates
 Timeout=20
 
 [Users]
-;; Specify all admin users (Telegram UserID [Integer]). For example: 
+;; Specify all admin users (Telegram UserID [Integer]). For example:
 ;;123456789=a
 ;; where 'a' character is means administrator, 'b' - banned
-YOUR_User_ID=a
+;; true = never reply to non-admin users (hides the very existence of the
+;; bot), false = answer them "You cannot access to this bot!"
+SilentForNonAdmins=false
 [Proxy]
 ;; If You can want to use HTTP proxy please use tgsynapsehttpclientbroker
 Host=
@@ -78,20 +84,38 @@ sudo dpkg --install tgshd_1.2.5.5-1_amd64.deb
 # The package maintainer scripts stop the old process and restart the service with the new binary automatically.
 ```
 
+### systemd unit
+The deb package ships the `tgshd.service` unit (`/lib/systemd/system/tgshd.service`) and the maintainer scripts enable and start it automatically on install, restart it on upgrade and stop it on removal.
+
+The unit:
+- `Type=simple`, `ExecStart=/usr/bin/tgshd -r`, `Restart=on-failure` with a 5 second delay, `WantedBy=multi-user.target`, starts after `network-online.target`
+- runs as root and is intentionally NOT sandboxed (no `User=`, no `ProtectSystem=`, no `NoNewPrivileges=`): the bot is a remote root terminal and must be able to edit /etc, use sudo/su and manage services. Restrict access with the `[Users]` section of `/etc/tgshd/tgshd.ini` instead, not with systemd.
+
+Managing it manually:
+```SH
+sudo systemctl status tgshd
+sudo systemctl restart tgshd
+# the daemon logs to syslog, journald picks it up:
+journalctl -u tgshd
+```
+
 ## Users rights and telegram user ID
 You can define user access in configuration file `tgshd.ini` by adding string like `user_id=a` where user_id is telegram user id of administrator.
 You can add more than one administrator.
 If any _simple_ telegram user sends any message, command etc to the bot then the bot will reply `You cannot access to this bot!`.
 if You add a line `user_id=b` then user will banned and the bot will not respond anything
 
+Set `SilentForNonAdmins=true` in the `[Users]` section to not reply to non-admin users at all: the bot behaves as if it does not exist for them (banned users are always ignored).
+
 There are some ways to determine your user_id but You can simply send `/myid` to [@HelloLazarusBot](https://t.me/hellolazarusbot) chat
 
 ## Telegram bot commands
+Any text message that is not a command is written to the shell stdin as is, and the shell output is sent back (long output is split into several UTF-8 safe messages).
 ### /read
 Reads messages from the shell console.
 Sometimes the program does not wait for a response immediately after execution in the console, and in this case, you can read the newly appeared messages by the `/read` command.
 ### /sig and /sigXXXX
-It is worked under Unix systems. The signal is delivered by kill(2) to the whole process group of the shell, i.e. to the shell itself and to the command it is currently running. 
+It is worked under Unix systems. The signal is delivered by kill(2) to the whole process group of the shell, i.e. to the shell itself and to the command it is currently running.
 For example, `/sig 9` where 9 is kill sig number or You can send commands `/sigint`, `/sigkill`, `/sigquit` and `/sigterm`.
 The shell is started in its own session (setsid), so the signals never reach the bot itself.
 If the signal terminates the shell, it is restarted automatically with a fresh environment (the shell state like its working directory and variables is not preserved).
@@ -101,7 +125,7 @@ or you can set the folder in the settings in the the `[Scripts]` section / `Dire
 ### /dir
 Calls the file Manager. You can set the default value in the configuration file
 ### /delete
-With the command (`/delete` `/fullpath/to/file`) You can delete file
+With the command (`/delete` `/fullpath/to/file`) You can delete file. The bot checks the file exists and asks for confirmation with the Ok/Cancel inline buttons; the file is deleted only after Ok. The confirmation expires together with the temporary path references (see File manager).
 
 ## Possible problems
 
