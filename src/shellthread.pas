@@ -52,10 +52,15 @@ type
     procedure BotReceiveFileCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       {%H-}AMessage: TTelegramMessageObj); 
     function AddPathRef(const APath: String): String;
+    procedure CallbackCancel;
+    procedure CallbackDelete(const AToken: String);
     procedure CallbackDir(const AToken: String);
     procedure CallbackFile(const AToken: String);
     procedure CallbackInput(const AToken: String);
     procedure CallbackScript(const AToken: String);
+    { Shows AMsg in place of the confirmation message, falling back to a
+      fresh message when the original is older than the Telegram edit limit }
+    procedure ConfirmDone(const AMsg: String);
     function PathByToken(const AToken: String; out APath: String): Boolean;
     function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
@@ -99,6 +104,7 @@ const
   {%H-}SIGTRAP = 5;
 {$ENDIF}
   _ScriptFileExt='.script';
+  _StaleDeleteMsg = 'Confirmation is outdated. Repeat /delete';
   _MaxButtons = 90;      // entries per /dir page: '..' + prev/next + Upload
                          // must also fit into the 100-button Telegram hard limit
   _OfsSep = '|';         // page token separator: '<offset>|<path>'
@@ -109,9 +115,10 @@ const
 
   dt_script='script';
   dt_dir='dir';
-  dt_file='file'; 
-  dt_input='input'; 
+  dt_file='file';
+  dt_input='input';
   dt_dlt='delete';
+  dt_cancel='cancel';
 
 
 { TShellThread }
@@ -210,18 +217,22 @@ begin
     aName:=Copy(aCmd, p+1, MaxInt);
     aCmd:=Copy(aCmd, 1, p-1);
   end;
-  // aName is a token into FPaths ('dir 12', 'file 34', 'script 7', 'input 42')
+  // aName is a token into FPaths ('dir 12', 'file 34', 'script 7',
+  // 'input 42', 'delete 5'); 'cancel' carries no token
   case aCmd of
     dt_script: CallbackScript(aName);
     dt_dir:    CallbackDir(aName);
     dt_file:   CallbackFile(aName);
     dt_input:  CallbackInput(aName);
+    dt_dlt:    CallbackDelete(aName);
+    dt_cancel: CallbackCancel;
   end;
 end;
 
 procedure TShellThread.BotReceiveDeleteCommand(ASender: TObject; const ACommand: String; AMessage: TTelegramMessageObj);
 var
   aPath: String;
+  aReplyMarkup: TReplyMarkup;
 begin
   if not CommandStart then
     Exit;
@@ -231,10 +242,21 @@ begin
   if aPath.IsEmpty then
     FBot.sendMessage('Use command line format like /delete `/path-to-the-file/file-name.ext`', pmMarkdown)
   else
-    if DeleteFileUTF8(aPath) then
-      FBot.sendMessage(Format('File (%s) succesfully deleted', [aPath]))
-    else
+    if not FileExistsUTF8(aPath) then
       FBot.sendMessage(emj_Wrnng+' '+Format('File (%s) deletion error', [aPath]))
+    else begin
+      // confirm before touching the file: the Ok button carries a token into
+      // FPaths, so the callback never parses the path out of message text
+      aReplyMarkup:=TReplyMarkup.Create;
+      try
+        aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
+        aReplyMarkup.InlineKeyBoard.AddButton('Ok', dt_dlt+' '+AddPathRef(aPath), 2);
+        aReplyMarkup.InlineKeyBoard.AddButton('Cancel', dt_cancel, 2);
+        FBot.sendMessage(Format('Delete %s?', [aPath]), pmDefault, True, aReplyMarkup);
+      finally
+        aReplyMarkup.Free;
+      end;
+    end;
 end;
 
 procedure TShellThread.BotReceiveReadCommand(ASender: TObject;
@@ -362,6 +384,34 @@ begin
     FileHandler(aPath)
   else
     FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+end;
+
+procedure TShellThread.CallbackDelete(const AToken: String);
+var
+  aPath: String;
+begin
+  if not PathByToken(AToken, aPath) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleDeleteMsg);
+    Exit;
+  end;
+  if DeleteFileUTF8(aPath) then
+    ConfirmDone(Format('File (%s) succesfully deleted', [aPath]))
+  else
+    ConfirmDone(emj_Wrnng+' '+Format('File (%s) deletion error', [aPath]));
+end;
+
+procedure TShellThread.CallbackCancel;
+begin
+  ConfirmDone('Deletion cancelled');
+end;
+
+procedure TShellThread.ConfirmDone(const AMsg: String);
+begin
+  // editing removes the Ok/Cancel keyboard; Telegram forbids editing
+  // messages older than 48 hours, fall back to a fresh message then
+  if not FBot.editMessageText(AMsg, pmDefault, True) then
+    FBot.sendMessage(AMsg);
 end;
 
 procedure TShellThread.CallbackInput(const AToken: String);
