@@ -25,10 +25,10 @@ type
     FChatDirs: TStringList; // chat id -> current folder (also the pending upload folder)
     FLPTimeout: Integer;
     FShellOwnGroup: Boolean; // the shell leads its own process group (safe to killpg)
-    procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);  
+    procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);
     procedure BotReceiveDeleteCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       AMessage: TTelegramMessageObj);
-    procedure BotReceiveMessage({%H-}ASender: TObject; AMessage: TTelegramMessageObj);     
+    procedure BotReceiveMessage({%H-}ASender: TObject; AMessage: TTelegramMessageObj);
     function BotReceiveDocument(aDocument: TTelegramDocument; const aPath: String): Boolean;
     { Read output from shell terminal by command }
     procedure BotReceiveReadCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
@@ -50,7 +50,7 @@ type
       {%H-}AMessage: TTelegramMessageObj);
     {$ENDIF}
     procedure BotReceiveFileCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
-      {%H-}AMessage: TTelegramMessageObj); 
+      {%H-}AMessage: TTelegramMessageObj);
     function AddPathRef(const APath: String): String;
     procedure CallbackCancel;
     procedure CallbackDelete(const AToken: String);
@@ -759,7 +759,7 @@ begin
   FBot.CommandHandlers['/sigkill']:=@BotReceiveSIGKILLCommand;
   FBot.CommandHandlers['/sigquit']:=@BotReceiveSIGQUITCommand;
   FBot.CommandHandlers['/sigterm']:=@BotReceiveSIGTERMCommand;{$ENDIF}
-  FBot.CommandHandlers['/'+dt_dir]:=@BotReceiveFileCommand;           
+  FBot.CommandHandlers['/'+dt_dir]:=@BotReceiveFileCommand;
   FBot.CommandHandlers['/'+dt_dlt]:=@BotReceiveDeleteCommand;
   FBot.OnReceiveCallbackQuery:=@BotReceiveCallbackQuery;{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
