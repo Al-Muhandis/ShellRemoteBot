@@ -111,6 +111,8 @@ There are some ways to determine your user_id but You can simply send `/myid` to
 
 ## Telegram bot commands
 Any text message that is not a command is written to the shell stdin as is, and the shell output is sent back (long output is split into several UTF-8 safe messages).
+
+On start the bot registers its commands in the Telegram command menu (`setMyCommands`): the menu button of the clients shows `/dir`, `/scripts`, `/read` and `/delete` with short descriptions, and `/sig` as well on Unix. A failed registration is only logged and never prevents the bot from starting.
 ### /read
 Reads messages from the shell console.
 Sometimes the program does not wait for a response immediately after execution in the console, and in this case, you can read the newly appeared messages by the `/read` command.

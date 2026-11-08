@@ -89,6 +89,11 @@ type
   delete verb plus the path token, both buttons carry Bot API 10.3 styles }
 procedure BuildDeleteConfirmKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
 
+{ Fills ACommands with the bot command menu: Telegram clients show it in the
+  menu button, so every handler is discoverable without reading the docs.
+  /sig is listed on UNIX only, where signals are actually deliverable }
+procedure BuildBotCommands(ACommands: TBotCommandArray);
+
 implementation
 
 uses
@@ -254,6 +259,17 @@ begin
   aBtn.callback_data:=dt_cancel;
   aBtn.Style:=btnStylePrimary;
   AKeyboard.AddButton(aBtn, 2);
+end;
+
+procedure BuildBotCommands(ACommands: TBotCommandArray);
+begin
+  ACommands.AddCommand('/dir', 'file manager');
+  ACommands.AddCommand('/scripts', 'run prepared scripts');
+  ACommands.AddCommand('/read', 'read shell output');
+  ACommands.AddCommand('/delete', 'delete a file');
+  {$IFDEF UNIX}
+  ACommands.AddCommand('/sig', 'send a signal to the shell process');
+  {$ENDIF}
 end;
 
 procedure TShellThread.BotReceiveDeleteCommand(ASender: TObject; const ACommand: String; AMessage: TTelegramMessageObj);
@@ -638,6 +654,9 @@ end;
 
 procedure TShellThread.FileHandler(const aPath: String);
 begin
+  // uploading may take a while for big files: show the upload status instead
+  // of a silent pause
+  FBot.sendChatAction(FBot.CurrentChatId, caUploadDocument);
   FBot.sendDocumentByFileName(FBot.CurrentChatId, aPath, ExtractFileDir(aPath));
 end;
 
@@ -682,6 +701,9 @@ end;
 
 procedure TShellThread.SendToShellTerminal(const InputString: String);
 begin
+  // both the interactive commands and the script runs end up here: show the
+  // typing status while the command makes its way through the shell pipes
+  FBot.sendChatAction(FBot.CurrentChatId, caTyping);
   OutputStd;
   FProc.Input.Write(InputString[1], Length(InputString));
   OutputStd;
@@ -766,6 +788,8 @@ begin
 end;
 
 constructor TShellThread.Create;
+var
+  aCommands: TBotCommandArray;
 begin
   inherited Create(True);
   FreeOnTerminate:=True;
@@ -796,6 +820,17 @@ begin
   FBot.OnReceiveCallbackQuery:=@BotReceiveCallbackQuery;{$IFDEF MSWINDOWS}
   SetConsoleOutputCP(CP_UTF8);{$ENDIF}
   FBot.ServiceUser:=Cnfg.ServiceUser;
+  aCommands:=TBotCommandArray.Create;
+  try
+    BuildBotCommands(aCommands);
+    // the menu is a convenience: a failed registration must not prevent the
+    // bot from starting (network errors are already swallowed into False)
+    if not FBot.setMyCommands(aCommands) then
+      Logger.Error('Failed to register bot commands (error '+
+        IntToStr(FBot.LastErrorCode)+')');
+  finally
+    aCommands.Free;
+  end;
   StartShell;
   FLPTimeout:=Cnfg.APITimeout;
 

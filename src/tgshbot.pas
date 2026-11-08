@@ -134,6 +134,14 @@ begin
     sleep(SleepTime);
     Result:=sendMessage(aChatID, AMessage, ParseMode, DisableWebPagePreview, ReplyMarkup, ReplyToMessageID);
   end;
+  // Telegram rejects some markup (e.g. unbalanced markdown entities) with 400:
+  // repeating the very same text without a parse mode keeps the message from
+  // being lost, the shell output is more valuable than its formatting
+  if (not Result) and (LastErrorCode=400) and (ParseMode<>pmDefault) then
+  begin
+    InfoMessage('Send rejected with 400, retried the same text without parse mode');
+    Result:=sendMessage(aChatID, AMessage, pmDefault, DisableWebPagePreview, ReplyMarkup, ReplyToMessageID);
+  end;
 end;
 
 end.
