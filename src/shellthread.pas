@@ -85,6 +85,10 @@ type
     procedure Execute; override;
   end;
 
+{ Fills AKeyboard with the /delete confirmation row: the Ok button carries the
+  delete verb plus the path token, both buttons carry Bot API 10.3 styles }
+procedure BuildDeleteConfirmKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
+
 implementation
 
 uses
@@ -119,6 +123,13 @@ const
   dt_input='input';
   dt_dlt='delete';
   dt_cancel='cancel';
+
+  // Bot API 10.3 button styles (TInlineKeyboardButton.Style); 'link' is the
+  // remaining style of the set, unused so far. Named so no raw style strings
+  // leak into the markup code
+  btnStyleDanger='danger';    // destructive confirmations
+  btnStyleSuccess='success';  // positive actions
+  btnStylePrimary='primary';  // neutral alternatives
 
 
 { TShellThread }
@@ -229,6 +240,22 @@ begin
   end;
 end;
 
+procedure BuildDeleteConfirmKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
+var
+  aBtn: TInlineKeyboardButton;
+begin
+  // ready buttons instead of AddButton(text, data): the style travels with
+  // the button it belongs to, no digging the button out of the last row
+  aBtn:=TInlineKeyboardButton.Create('Ok');
+  aBtn.callback_data:=dt_dlt+' '+AToken;
+  aBtn.Style:=btnStyleDanger;
+  AKeyboard.AddButton(aBtn, 2);
+  aBtn:=TInlineKeyboardButton.Create('Cancel');
+  aBtn.callback_data:=dt_cancel;
+  aBtn.Style:=btnStylePrimary;
+  AKeyboard.AddButton(aBtn, 2);
+end;
+
 procedure TShellThread.BotReceiveDeleteCommand(ASender: TObject; const ACommand: String; AMessage: TTelegramMessageObj);
 var
   aPath: String;
@@ -250,8 +277,7 @@ begin
       aReplyMarkup:=TReplyMarkup.Create;
       try
         aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
-        aReplyMarkup.InlineKeyBoard.AddButton('Ok', dt_dlt+' '+AddPathRef(aPath), 2);
-        aReplyMarkup.InlineKeyBoard.AddButton('Cancel', dt_cancel, 2);
+        BuildDeleteConfirmKeyboard(AddPathRef(aPath), aReplyMarkup.InlineKeyBoard);
         FBot.sendMessage(Format('Delete %s?', [aPath]), pmDefault, True, aReplyMarkup);
       finally
         aReplyMarkup.Free;
@@ -536,6 +562,7 @@ var
   aDirs, aFiles: TStringList;
   aReplyMarkup: TReplyMarkup;
   aNavRow: TInlineKeyboardButtons;
+  aUploadBtn: TInlineKeyboardButton;
   i, aTotal, aPageEnd, aShown, aPrev: Integer;
 begin
   aDir:=IncludeTrailingPathDelimiter(aPath);
@@ -589,7 +616,12 @@ begin
         aNavRow:=aReplyMarkup.InlineKeyBoard.Add;
       aNavRow.AddButton('▶️', dt_dir+' '+AddPathRef(IntToStr(aPageEnd)+_OfsSep+aDir));
     end;
-    aReplyMarkup.InlineKeyBoard.Add.AddButton('Upload...', dt_input+' '+AddPathRef(aDir));
+    // the upload action is the positive one: it gets its own row and the
+    // Bot API 10.3 success style
+    aUploadBtn:=TInlineKeyboardButton.Create('Upload...');
+    aUploadBtn.callback_data:=dt_input+' '+AddPathRef(aDir);
+    aUploadBtn.Style:=btnStyleSuccess;
+    aReplyMarkup.InlineKeyBoard.Add.Add(aUploadBtn);
     s:=FormatPath(aDir);
     if (aOffset>0) or (aPageEnd<aTotal) then
       s+=LineEnding+Format('Entries %d-%d of %d', [aOffset+1, aOffset+aShown, aTotal]);

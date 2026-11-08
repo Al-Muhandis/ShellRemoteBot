@@ -45,7 +45,7 @@
         <PackageName Value="FCL"/>
       </Item3>
     </RequiredPackages>
-    <Units Count="4">
+    <Units Count="5">
       <Unit0>
         <Filename Value="tgshdtests.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -62,6 +62,10 @@
         <Filename Value="testconfiguration.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit3>
+      <Unit4>
+        <Filename Value="testshellthread.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit4>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

@@ -4,7 +4,7 @@ program tgshdtests;
 
 uses
   Classes, SysUtils, consoletestrunner, testpathrefs, testtgshbot,
-  testconfiguration
+  testconfiguration, testshellthread
   ;
 
 type
