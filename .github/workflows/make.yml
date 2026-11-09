@@ -27,12 +27,15 @@ jobs:
           - ubuntu-latest
           - windows-latest
     steps:
+    - name: Clone SSH submodule URLs over HTTPS
+      run: git config --global url."https://github.com/".insteadOf "git@github.com:"
     - name: Checkout
       uses: actions/checkout@v4
       with:
         # Full history with tags: make.ver.sh derives the version from git describe
         fetch-depth: 0
-        submodules: true
+        # Nested submodules (fp-telegram -> synapse) must be cloned too
+        submodules: recursive
 
     - name: Build on Linux
       if: runner.os == 'Linux'

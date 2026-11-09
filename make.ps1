@@ -56,6 +56,48 @@ Function Test-PeFile {
     }
 }
 
+Function Request-SourceForgeFile {
+    # SourceForge hands the real download out via signed URLs: a bare request
+    # (no browser User-Agent) gets an HTTP redirect to it, while browser-like
+    # clients get an HTML interstitial with the same URL in its meta refresh.
+    # Try curl.exe first, then Invoke-WebRequest with the mirrors until a
+    # real executable lands
+    Param([string]$Project, [string]$Path, [string]$File, [string[]]$Mirrors,
+        [long]$MinSize = 1KB)
+    ForEach ($Mirror in $Mirrors) {
+        & curl.exe --silent --show-error --location --max-redirs 10 `
+            --connect-timeout 20 --max-time 600 --output $File (
+                "https://sourceforge.net/projects/$Project/files/$Path/$File/download" +
+                $(If ($Mirror) { "?use_mirror=$Mirror" })
+            )
+        If ($LASTEXITCODE -eq 0 -and (Test-PeFile -Path $File -MinSize $MinSize)) {
+            Return
+        }
+        Write-Warning "curl.exe mirror '$Mirror': exit code $LASTEXITCODE, $((Get-Item $File -ErrorAction SilentlyContinue).Length) bytes received"
+        Remove-Item -Path $File -ErrorAction SilentlyContinue
+    }
+    ForEach ($Mirror in ($Mirrors | Where-Object { $_ })) {
+        Try {
+            $Page = Invoke-WebRequest -TimeoutSec 60 -Uri (
+                "https://$Mirror.dl.sourceforge.net/project/$Project/$Path/$File?viasf=1"
+            )
+            $Signed = [regex]::Match($Page.Content, 'http-equiv="refresh"[^>]+url=([^">]+)').Groups[1].Value
+            If (-not $Signed) {
+                Throw 'no signed download URL on the interstitial page'
+            }
+            Invoke-WebRequest -TimeoutSec 300 -Uri $Signed.Replace('&amp;', '&') -OutFile $File
+            If (Test-PeFile -Path $File -MinSize $MinSize) {
+                Return
+            }
+            Throw "received $((Get-Item $File).Length) bytes, not an executable"
+        } Catch {
+            Write-Warning "Invoke-WebRequest mirror '$Mirror': $($_.Exception.Message)"
+            Remove-Item -Path $File -ErrorAction SilentlyContinue
+        }
+    }
+    Throw "Failed to download $File from SourceForge"
+}
+
 Function Initialize-Lazbuild {
     $VAR = @{
         Cmd = 'lazbuild'
@@ -68,31 +110,15 @@ Function Initialize-Lazbuild {
         $env:PATH+=";$($VAR.Path)"
     }
     If ( -not (Get-Command -Name $VAR.Cmd -ErrorAction SilentlyContinue) ) {
-        # The first entry is the SourceForge mirror selector, the rest are
-        # concrete mirrors to fall back on when it serves a broken download
-        $Urls = 'downloads.sourceforge.net', 'netix.dl.sourceforge.net',
-            'netcologne.dl.sourceforge.net', 'freefr.dl.sourceforge.net',
-            'deac-riga.dl.sourceforge.net' | ForEach-Object {
-                "https://$($_)/project/lazarus/Lazarus%20Windows%2064%20bits/$($VAR.File)?viasf=1"
-            }
-        ForEach ($Url in $Urls) {
-            Try {
-                Request-File $Url | Out-Null
-                If ( -not (Test-PeFile -Path $VAR.File -MinSize 100MB) ) {
-                    Throw 'downloaded file is not a Windows executable'
-                }
-                $VAR.File | Install-Program
-                If ( Test-Path -Path "$($VAR.Path)\$($VAR.Cmd).exe" ) {
-                    $env:PATH+=";$($VAR.Path)"
-                    Return
-                }
-                Throw "no $($VAR.Cmd).exe in $($VAR.Path) after installation"
-            } Catch {
-                Write-Warning "$($Url): $($_.Exception.Message)"
-                Remove-Item -Path $VAR.File -ErrorAction SilentlyContinue
-            }
+        # Empty mirror name asks SourceForge to pick one itself, the rest are
+        # concrete mirrors to fall back on
+        Request-SourceForgeFile -Project 'lazarus' -Path 'Lazarus%20Windows%2064%20bits/Lazarus%203.6' `
+            -File $VAR.File -Mirrors @('', 'phoenixnap', 'netix', 'deac-riga', 'freefr') -MinSize 100MB
+        $VAR.File | Install-Program
+        If ( -not (Test-Path -Path "$($VAR.Path)\$($VAR.Cmd).exe") ) {
+            Throw "no $($VAR.Cmd).exe in $($VAR.Path) after installation"
         }
-        Throw 'Failed to download and install Lazarus from SourceForge'
+        $env:PATH+=";$($VAR.Path)"
     }
 }
 
