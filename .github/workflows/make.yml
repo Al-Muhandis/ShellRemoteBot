@@ -20,6 +20,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     strategy:
+      # A flaky SourceForge download on one OS must not cancel the other job
+      fail-fast: false
       matrix:
         os:
           - ubuntu-latest
@@ -53,6 +55,25 @@ jobs:
         path: |
           src/x86_64-linux/tgshd
           tgshd_*.deb
+
+    - name: Resolve Lazarus installer name for the cache key
+      if: runner.os == 'Windows'
+      id: lazarus
+      shell: pwsh
+      run: |
+        # Keep the cache key in sync with the installer version in make.ps1:
+        # a changed installer name automatically invalidates the cache
+        $File = (Select-String -Path make.ps1 -Pattern "File = '(lazarus-[^']+\.exe)'").Matches[0].Groups[1].Value
+        "key=$File" >> $env:GITHUB_OUTPUT
+
+    - name: Cache Lazarus on Windows
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        # Exact key only: with restore-keys a stale C:\Lazarus of an older
+        # Lazarus could be silently reused instead of reinstalling
+        key: ${{ steps.lazarus.outputs.key }}
+        path: C:\Lazarus
 
     - name: Build on Windows
       if: runner.os == 'Windows'

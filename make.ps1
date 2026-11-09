@@ -35,10 +35,31 @@ Function Install-Program {
     }
 }
 
+Function Test-PeFile {
+    # SourceForge mirrors may silently serve an HTML error page or a truncated
+    # download in place of the file: require the minimal size and the MZ
+    # signature of a Windows executable before running it
+    Param([string]$Path, [long]$MinSize)
+    $File = Get-Item -Path $Path -ErrorAction SilentlyContinue
+    If ( $Null -eq $File -or $File.Length -lt $MinSize ) {
+        Return $False
+    }
+    $Stream = [System.IO.File]::OpenRead($Path)
+    Try {
+        $Head = [byte[]]::new(2)
+        If ( $Stream.Read($Head, 0, $Head.Length) -lt $Head.Length ) {
+            Return $False
+        }
+        Return $Head[0] -eq 0x4D -and $Head[1] -eq 0x5A
+    } Finally {
+        $Stream.Close()
+    }
+}
+
 Function Initialize-Lazbuild {
     $VAR = @{
         Cmd = 'lazbuild'
-        Url = 'https://netix.dl.sourceforge.net/project/lazarus/Lazarus%20Windows%2064%20bits/Lazarus%203.6/lazarus-3.6-fpc-3.2.2-win64.exe?viasf=1'
+        File = 'lazarus-3.6-fpc-3.2.2-win64.exe'
         Path = "C:\Lazarus"
     }
     # A previous process (e.g. the CI build step) may have installed Lazarus
@@ -46,12 +67,32 @@ Function Initialize-Lazbuild {
     If ( Test-Path -Path "$($VAR.Path)\$($VAR.Cmd).exe" ) {
         $env:PATH+=";$($VAR.Path)"
     }
-    Try {
-        Get-Command $VAR.Cmd | Out-Null
-    } Catch {
-        Request-File $VAR.Url | Install-Program
-        $env:PATH+=";$($VAR.Path)"
-        Get-Command $VAR.Cmd | Out-Null
+    If ( -not (Get-Command -Name $VAR.Cmd -ErrorAction SilentlyContinue) ) {
+        # The first entry is the SourceForge mirror selector, the rest are
+        # concrete mirrors to fall back on when it serves a broken download
+        $Urls = 'downloads.sourceforge.net', 'netix.dl.sourceforge.net',
+            'netcologne.dl.sourceforge.net', 'freefr.dl.sourceforge.net',
+            'deac-riga.dl.sourceforge.net' | ForEach-Object {
+                "https://$($_)/project/lazarus/Lazarus%20Windows%2064%20bits/$($VAR.File)?viasf=1"
+            }
+        ForEach ($Url in $Urls) {
+            Try {
+                Request-File $Url | Out-Null
+                If ( -not (Test-PeFile -Path $VAR.File -MinSize 100MB) ) {
+                    Throw 'downloaded file is not a Windows executable'
+                }
+                $VAR.File | Install-Program
+                If ( Test-Path -Path "$($VAR.Path)\$($VAR.Cmd).exe" ) {
+                    $env:PATH+=";$($VAR.Path)"
+                    Return
+                }
+                Throw "no $($VAR.Cmd).exe in $($VAR.Path) after installation"
+            } Catch {
+                Write-Warning "$($Url): $($_.Exception.Message)"
+                Remove-Item -Path $VAR.File -ErrorAction SilentlyContinue
+            }
+        }
+        Throw 'Failed to download and install Lazarus from SourceForge'
     }
 }
 
