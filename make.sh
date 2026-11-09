@@ -69,6 +69,9 @@ function priv_dpkg
     # Package filename is taken from ${1}; without it it is requested
     # interactively (the argument form is meant for non-interactive CI).
     declare -r STAGING_DIR=./deb.staging
+    # Git does not track the empty usr/bin directory: create it before
+    # staging the binary into it (a fresh clone, e.g. CI, lacks it)
+    mkdir --parents "${STAGING_DIR}/usr/bin"
     if [[ -f 'src/x86_64-linux/tgshd' ]]; then
         cp --force 'src/x86_64-linux/tgshd' "${STAGING_DIR}/usr/bin/tgshd"
         echo "Staged binary: src/x86_64-linux/tgshd -> ${STAGING_DIR}/usr/bin/tgshd" 1>&2
