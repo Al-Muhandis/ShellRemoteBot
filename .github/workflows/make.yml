@@ -46,7 +46,7 @@ jobs:
 
     - name: Upload Linux artifacts
       if: runner.os == 'Linux'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: tgshd-linux-amd64
         if-no-files-found: error
@@ -68,7 +68,7 @@ jobs:
 
     - name: Upload Windows artifact
       if: runner.os == 'Windows'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: tgshd-win64
         if-no-files-found: error
