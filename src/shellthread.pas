@@ -13,6 +13,18 @@ uses
 
 type
 
+  { What the file card shows about a file. Found=False means the file could
+    not be stat'ed, typically because it is already gone since the listing
+    was built. ModeStr/OwnerStr are filled on UNIX only, where FpStat
+    provides the rights and the owner }
+  TFileStatInfo=record
+    Found: Boolean;
+    Size: Int64;
+    ModTime: TDateTime;
+    ModeStr: String;
+    OwnerStr: String;
+  end;
+
   { TShellThread }
 
   TShellThread=class(TThread)
@@ -54,19 +66,32 @@ type
     function AddPathRef(const APath: String): String;
     procedure CallbackCancel;
     procedure CallbackDelete(const AToken: String);
+    procedure CallbackDeleteAsk(const AToken: String);
     procedure CallbackDir(const AToken: String);
+    procedure CallbackDownload(const AToken: String);
     procedure CallbackFile(const AToken: String);
     procedure CallbackInput(const AToken: String);
     procedure CallbackScript(const AToken: String);
-    { Shows AMsg in place of the confirmation message, falling back to a
-      fresh message when the original is older than the Telegram edit limit }
-    procedure ConfirmDone(const AMsg: String);
+    { Shows AMsg in place of the current message (optionally with a keyboard),
+      falling back to a fresh message when the original is older than the
+      Telegram edit limit }
+    procedure ConfirmDone(const AMsg: String; AReplyMarkup: TReplyMarkup = nil;
+      AMode: TParseMode = pmDefault);
     function PathByToken(const AToken: String; out APath: String): Boolean;
     function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
     procedure DirHandler(const aPath: String; aOffset: Integer = 0);
     procedure SplitPageToken(const AValue: String; out APath: String; out AOffset: Integer);
-    procedure FileHandler(const aPath: String);
+    { Opens the file card in place of the listing; aOffset keeps the page of
+      the listing the card was opened from }
+    procedure FileCardHandler(const aPath: String; aOffset: Integer);
+    { Reads size, modification time and, where the OS provides them, the
+      rights and the owner of aPath }
+    function GetFileStatInfo(const aPath: String): TFileStatInfo;
+    { Shows the mandatory delete confirmation: Ok carries the delete verb with
+      the path/page token, Cancel bails out. In a callback it replaces the
+      current message (the file card), from /delete it posts a fresh one }
+    procedure AskDeleteConfirm(const aPath: String; aOffset: Integer);
     class function FormatPath(const aPath: String): String;
     function GetChatDir(AChatId: Int64; out ADir: String): Boolean;
     function GetLogger: TEventLog;
@@ -89,6 +114,26 @@ type
   delete verb plus the path token, both buttons carry Bot API 10.3 styles }
 procedure BuildDeleteConfirmKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
 
+{ Fills AKeyboard with the file card actions: download, delete and back to the
+  parent listing; every button carries its callback token and a Bot API 10.3
+  style }
+procedure BuildFileCardKeyboard(const ADownToken, ADeleteToken,
+  ABackToken: String; AKeyboard: TInlineKeyboard);
+
+{ Formats a byte count the human way: whole bytes under 1 KiB, then the largest
+  fitting 1024-based unit with one decimal (K/M/G/T). Integer math only, so the
+  output never depends on locale decimal separators }
+function FormatFileSize(ASize: Int64): String;
+
+{ Renders the 12 permission bits of a UNIX mode value (suid/sgid/sticky plus
+  the rwx triplets) as the familiar 4-digit octal, e.g. 420 -> '0644' }
+function ModeToOctal(AMode: LongWord): String;
+
+{ Returns AOffset pulled back to the last page that still has entries when it
+  went past the end: a delete can leave the stored page empty. ATotal<=0 (and
+  a non-positive page size) always yields 0 }
+function ClampPageOffset(ATotal, AOffset, APageSize: Integer): Integer;
+
 { Fills ACommands with the bot command menu: Telegram clients show it in the
   menu button, so every handler is discoverable without reading the docs.
   /sig is listed on UNIX only, where signals are actually deliverable }
@@ -98,6 +143,7 @@ implementation
 
 uses
   configuration, strutils, LazFileUtils, FileUtil, tgutils, LazUTF8, fphttpclient
+  {$IFDEF UNIX}, DateUtils{$ENDIF}
   ;
 
 const
@@ -118,6 +164,8 @@ const
                          // must also fit into the 100-button Telegram hard limit
   _OfsSep = '|';         // page token separator: '<offset>|<path>'
   _StaleListMsg = 'Listing is outdated. Call /dir again';
+  _MaxSendDocSize = 50*1024*1024; // the Bot API hard limit for one document:
+                                  // larger files must not even be attempted
 
   emj_FileFolder='📁';
   emj_Wrnng='⚠️';
@@ -125,7 +173,10 @@ const
   dt_script='script';
   dt_dir='dir';
   dt_file='file';
+  dt_down='download';
   dt_input='input';
+  dt_dltask='askdelete';  // opens the confirmation; the deletion itself is
+                          // only ever performed by dt_dlt after Ok
   dt_dlt='delete';
   dt_cancel='cancel';
 
@@ -233,15 +284,18 @@ begin
     aName:=Copy(aCmd, p+1, MaxInt);
     aCmd:=Copy(aCmd, 1, p-1);
   end;
-  // aName is a token into FPaths ('dir 12', 'file 34', 'script 7',
-  // 'input 42', 'delete 5'); 'cancel' carries no token
+  // aName is a token into FPaths ('dir 12', 'file 34', 'download 56',
+  // 'script 7', 'input 42', 'askdelete 5', 'delete 3'); 'cancel' carries
+  // no token
   case aCmd of
-    dt_script: CallbackScript(aName);
-    dt_dir:    CallbackDir(aName);
-    dt_file:   CallbackFile(aName);
-    dt_input:  CallbackInput(aName);
-    dt_dlt:    CallbackDelete(aName);
-    dt_cancel: CallbackCancel;
+    dt_script:  CallbackScript(aName);
+    dt_dir:     CallbackDir(aName);
+    dt_file:    CallbackFile(aName);
+    dt_down:    CallbackDownload(aName);
+    dt_input:   CallbackInput(aName);
+    dt_dltask:  CallbackDeleteAsk(aName);
+    dt_dlt:     CallbackDelete(aName);
+    dt_cancel:  CallbackCancel;
   end;
 end;
 
@@ -261,6 +315,69 @@ begin
   AKeyboard.AddButton(aBtn, 2);
 end;
 
+procedure BuildFileCardKeyboard(const ADownToken, ADeleteToken,
+  ABackToken: String; AKeyboard: TInlineKeyboard);
+var
+  aBtn: TInlineKeyboardButton;
+begin
+  // one row of three: the same MaxColsInRow trick the confirmation row uses
+  aBtn:=TInlineKeyboardButton.Create('⬇ Download');
+  aBtn.callback_data:=dt_down+' '+ADownToken;
+  aBtn.Style:=btnStyleSuccess;
+  AKeyboard.AddButton(aBtn, 3);
+  aBtn:=TInlineKeyboardButton.Create('🗑 Delete');
+  aBtn.callback_data:=dt_dltask+' '+ADeleteToken;
+  aBtn.Style:=btnStyleDanger;
+  AKeyboard.AddButton(aBtn, 3);
+  aBtn:=TInlineKeyboardButton.Create('◀ Back');
+  aBtn.callback_data:=dt_dir+' '+ABackToken;
+  aBtn.Style:=btnStylePrimary;
+  AKeyboard.AddButton(aBtn, 3);
+end;
+
+function FormatFileSize(ASize: Int64): String;
+var
+  aIdx, aRem: Int64;
+const
+  _SizeUnit = 1024;
+  _Units: array[0..4] of String = ('B', 'K', 'M', 'G', 'T');
+begin
+  aIdx:=0;
+  aRem:=0;
+  // scale down keeping the remainder for the decimal digit; the last unit
+  // also takes everything larger, so no P/E ladder in the UI
+  while (aIdx<High(_Units)) and (ASize>=_SizeUnit) do
+  begin
+    aRem:=ASize mod _SizeUnit;
+    ASize:=ASize div _SizeUnit;
+    Inc(aIdx);
+  end;
+  if aIdx=0 then
+    Result:=IntToStr(ASize)+' B'
+  else
+    Result:=IntToStr(ASize)+'.'+IntToStr(aRem*10 div _SizeUnit)+' '+_Units[aIdx];
+end;
+
+function ModeToOctal(AMode: LongWord): String;
+var
+  i: Integer;
+begin
+  // 4 fixed octal digits keep the suid/sgid/sticky bits and leading zeros
+  // visible, exactly how ls shows the permissions
+  Result:=EmptyStr;
+  for i:=3 downto 0 do
+    Result+=IntToStr((AMode shr (i*3)) and 7);
+end;
+
+function ClampPageOffset(ATotal, AOffset, APageSize: Integer): Integer;
+begin
+  if (ATotal<=0) or (APageSize<=0) then
+    Exit(0);
+  Result:=((ATotal-1) div APageSize)*APageSize; // the last non-empty page
+  if AOffset<Result then
+    Result:=AOffset;
+end;
+
 procedure BuildBotCommands(ACommands: TBotCommandArray);
 begin
   ACommands.AddCommand('/dir', 'file manager');
@@ -275,7 +392,6 @@ end;
 procedure TShellThread.BotReceiveDeleteCommand(ASender: TObject; const ACommand: String; AMessage: TTelegramMessageObj);
 var
   aPath: String;
-  aReplyMarkup: TReplyMarkup;
 begin
   if not CommandStart then
     Exit;
@@ -287,18 +403,12 @@ begin
   else
     if not FileExistsUTF8(aPath) then
       FBot.sendMessage(emj_Wrnng+' '+Format('File (%s) deletion error', [aPath]))
-    else begin
+    else
       // confirm before touching the file: the Ok button carries a token into
-      // FPaths, so the callback never parses the path out of message text
-      aReplyMarkup:=TReplyMarkup.Create;
-      try
-        aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
-        BuildDeleteConfirmKeyboard(AddPathRef(aPath), aReplyMarkup.InlineKeyBoard);
-        FBot.sendMessage(Format('Delete %s?', [aPath]), pmDefault, True, aReplyMarkup);
-      finally
-        aReplyMarkup.Free;
-      end;
-    end;
+      // FPaths, so the callback never parses the path out of message text.
+      // Outside a callback ConfirmDone posts the confirmation as a fresh
+      // message instead of an edit
+      AskDeleteConfirm(aPath, 0);
 end;
 
 procedure TShellThread.BotReceiveReadCommand(ASender: TObject;
@@ -420,25 +530,75 @@ end;
 
 procedure TShellThread.CallbackFile(const AToken: String);
 var
-  aPath: String;
+  aValue, aPath: String;
+  aOffset: Integer;
 begin
-  if PathByToken(AToken, aPath) then
-    FileHandler(aPath)
-  else
+  if not PathByToken(AToken, aValue) then
+  begin
     FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+    Exit;
+  end;
+  // the listing keeps the page offset with the path ('<offset>|<path>') so
+  // the card can reopen exactly the page it was opened from
+  SplitPageToken(aValue, aPath, aOffset);
+  FileCardHandler(aPath, aOffset);
+end;
+
+procedure TShellThread.CallbackDeleteAsk(const AToken: String);
+var
+  aValue, aPath: String;
+  aOffset: Integer;
+begin
+  if not PathByToken(AToken, aValue) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+    Exit;
+  end;
+  SplitPageToken(aValue, aPath, aOffset);
+  AskDeleteConfirm(aPath, aOffset);
+end;
+
+procedure TShellThread.AskDeleteConfirm(const aPath: String; aOffset: Integer);
+var
+  aReplyMarkup: TReplyMarkup;
+begin
+  aReplyMarkup:=TReplyMarkup.Create;
+  try
+    // the Ok token keeps the page offset ('<offset>|<path>'): after the
+    // delete the listing reopens on the same page; a plain path from
+    // /delete has none and lands on page 0
+    aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
+    BuildDeleteConfirmKeyboard(AddPathRef(IntToStr(aOffset)+_OfsSep+aPath),
+      aReplyMarkup.InlineKeyBoard);
+    ConfirmDone(Format('Delete %s?', [aPath]), aReplyMarkup);
+  finally
+    aReplyMarkup.Free;
+  end;
 end;
 
 procedure TShellThread.CallbackDelete(const AToken: String);
 var
-  aPath: String;
+  aValue, aPath, aParent: String;
+  aOffset: Integer;
 begin
-  if not PathByToken(AToken, aPath) then
+  if not PathByToken(AToken, aValue) then
   begin
     FBot.sendMessage(emj_Wrnng+' '+_StaleDeleteMsg);
     Exit;
   end;
+  // the Ok button of the confirmation carries the page offset with the path
+  // ('<offset>|<path>'), a plain path from /delete has none and lands on
+  // page 0
+  SplitPageToken(aValue, aPath, aOffset);
   if DeleteFileUTF8(aPath) then
-    ConfirmDone(Format('File (%s) succesfully deleted', [aPath]))
+  begin
+    // no separate 'deleted' note: the reopened listing proves it and the
+    // user stays one tap from continuing to work with the folder
+    aParent:=ExtractFileDir(aPath);
+    if aParent=EmptyStr then
+      aParent:=PathDelim;
+    DirHandler(aParent, aOffset);
+  end
   else
     ConfirmDone(emj_Wrnng+' '+Format('File (%s) deletion error', [aPath]));
 end;
@@ -448,12 +608,15 @@ begin
   ConfirmDone('Deletion cancelled');
 end;
 
-procedure TShellThread.ConfirmDone(const AMsg: String);
+procedure TShellThread.ConfirmDone(const AMsg: String; AReplyMarkup: TReplyMarkup;
+  AMode: TParseMode);
 begin
-  // editing removes the Ok/Cancel keyboard; Telegram forbids editing
-  // messages older than 48 hours, fall back to a fresh message then
-  if not FBot.editMessageText(AMsg, pmDefault, True) then
-    FBot.sendMessage(AMsg);
+  // editing removes the previous keyboard; Telegram forbids editing
+  // messages older than 48 hours, fall back to a fresh message then.
+  // sendMessageSafe also survives a markup the message text breaks (400)
+  // and rate limiting (429)
+  if not FBot.editMessageText(AMsg, AMode, True, AReplyMarkup) then
+    FBot.sendMessageSafe(AMsg, AMode, True, AReplyMarkup);
 end;
 
 procedure TShellThread.CallbackInput(const AToken: String);
@@ -599,6 +762,9 @@ begin
     FindAllDirectories(aDirs, aDir, False);
     FindAllFiles(aFiles, aDir, EmptyStr, False);
     aTotal:=aDirs.Count+aFiles.Count;
+    // a delete can leave the stored page empty: reopen on the last page
+    // that still has entries instead
+    aOffset:=ClampPageOffset(aTotal, aOffset, _MaxButtons);
     aPageEnd:=aOffset+_MaxButtons;
     aShown:=0;
     for i:=0 to aDirs.Count-1 do
@@ -613,7 +779,10 @@ begin
       if (aDirs.Count+i>=aOffset) and (aDirs.Count+i<aPageEnd) then
       begin
         aName:=ExtractFileName(aFiles[i]);
-        aReplyMarkup.InlineKeyBoard.AddButton(aName, dt_file+' '+AddPathRef(aFiles[i]), 2);
+        // the file token carries the page offset ('<offset>|<path>'): the
+        // card it opens sends Back and delete-return to the same page
+        aReplyMarkup.InlineKeyBoard.AddButton(aName,
+          dt_file+' '+AddPathRef(IntToStr(aOffset)+_OfsSep+aFiles[i]), 2);
         Inc(aShown);
       end;
     // prev/next page buttons share one row
@@ -642,7 +811,7 @@ begin
     if (aOffset>0) or (aPageEnd<aTotal) then
       s+=LineEnding+Format('Entries %d-%d of %d', [aOffset+1, aOffset+aShown, aTotal]);
     if IsCallback then
-      FBot.editMessageText(s, pmMarkdown, True, aReplyMarkup)
+      ConfirmDone(s, aReplyMarkup, pmMarkdown)
     else
       FBot.sendMessage(s, pmMarkdown, True, aReplyMarkup);
   finally
@@ -652,13 +821,120 @@ begin
   end;
 end;
 
-procedure TShellThread.FileHandler(const aPath: String);
+procedure TShellThread.CallbackDownload(const AToken: String);
+var
+  aInfo: TFileStatInfo;
+  aPath, aMsg: String;
 begin
-  // uploading may take a while for big files: show the upload status instead
-  // of a silent pause
-  FBot.sendChatAction(FBot.CurrentChatId, caUploadDocument);
-  FBot.sendDocumentByFileName(FBot.CurrentChatId, aPath, ExtractFileDir(aPath));
+  if not PathByToken(AToken, aPath) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+    Exit;
+  end;
+  aInfo:=GetFileStatInfo(aPath);
+  if not aInfo.Found then
+    ConfirmDone(emj_Wrnng+' '+Format('File (%s) is not available anymore', [aPath]))
+  else
+  if aInfo.Size>_MaxSendDocSize then
+  begin
+    // sending would be rejected by the Bot API anyway: save the user the
+    // upload attempt and point at the shell tools that can shrink the file
+    aMsg:=Format('File (%s) is %s, larger than %s the Bot API can send.',
+      [aPath, FormatFileSize(aInfo.Size), FormatFileSize(_MaxSendDocSize)]);
+    aMsg+=' Split or zip it via the shell, for example '+mdCode+'split -b 40M '+
+      ExtractFileName(aPath)+mdCode;
+    ConfirmDone(emj_Wrnng+' '+aMsg, nil, pmMarkdown);
+  end
+  else
+  begin
+    // uploading may take a while for big files: show the upload status instead
+    // of a silent pause
+    FBot.sendChatAction(FBot.CurrentChatId, caUploadDocument);
+    FBot.sendDocumentByFileName(FBot.CurrentChatId, aPath, ExtractFileDir(aPath));
+  end;
 end;
+
+procedure TShellThread.FileCardHandler(const aPath: String; aOffset: Integer);
+var
+  aInfo: TFileStatInfo;
+  aMsg, aParent, aPageToken: String;
+  aReplyMarkup: TReplyMarkup;
+begin
+  aInfo:=GetFileStatInfo(aPath);
+  aMsg:=emj_FileFolder+' '+mdCode+ExtractFileName(aPath)+mdCode+LineEnding;
+  if aInfo.Found then
+  begin
+    aMsg+='Size: '+FormatFileSize(aInfo.Size)+LineEnding;
+    aMsg+='Modified: '+FormatDateTime('yyyy-mm-dd hh:nn:ss', aInfo.ModTime);
+    if aInfo.ModeStr<>EmptyStr then
+      aMsg+=LineEnding+'Mode: '+aInfo.ModeStr+', owner '+aInfo.OwnerStr;
+  end
+  else
+    // the file may be gone since the listing was built: keep the card
+    // readable instead of hiding it behind an error
+    aMsg+='Size: n/a'+LineEnding+'Modified: n/a';
+  aParent:=ExtractFileDir(aPath);
+  if aParent=EmptyStr then
+    aParent:=PathDelim;
+  // the offset travels with the tokens: Back and a successful delete reopen
+  // the very page of the parent listing the card was opened from
+  aPageToken:=IntToStr(aOffset)+_OfsSep;
+  aReplyMarkup:=TReplyMarkup.Create;
+  try
+    aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
+    BuildFileCardKeyboard(AddPathRef(aPath),
+      AddPathRef(aPageToken+aPath), AddPathRef(aPageToken+aParent),
+      aReplyMarkup.InlineKeyBoard);
+    ConfirmDone(aMsg, aReplyMarkup, pmMarkdown);
+  finally
+    aReplyMarkup.Free;
+  end;
+end;
+
+{$IFDEF UNIX}
+function TShellThread.GetFileStatInfo(const aPath: String): TFileStatInfo;
+var
+  aStat: TStat;
+begin
+  Result.Found:=False;
+  Result.Size:=0;
+  Result.ModTime:=0;
+  Result.ModeStr:=EmptyStr;
+  Result.OwnerStr:=EmptyStr;
+  aStat:=Default(TStat); // FpStat is external: the compiler cannot see it
+                         // filling the buffer
+  if FpStat(pChar(aPath), aStat)<0 then
+    Exit;  // typically the file is already gone: the card shows unknowns
+  Result.Found:=True;
+  Result.Size:=aStat.st_size;
+  Result.ModTime:=UnixToDateTime(aStat.st_mtime);
+  // numeric owner: resolving uid/gid to names would add the users package,
+  // which is missing from some FPC installs this project builds with
+  Result.ModeStr:=ModeToOctal(aStat.st_mode);
+  Result.OwnerStr:=IntToStr(aStat.st_uid)+':'+IntToStr(aStat.st_gid);
+end;
+{$ENDIF}
+{$IFDEF MSWINDOWS}
+function TShellThread.GetFileStatInfo(const aPath: String): TFileStatInfo;
+var
+  sr: TSearchRec;
+begin
+  Result.Found:=False;
+  Result.Size:=0;
+  Result.ModTime:=0;
+  Result.ModeStr:=EmptyStr;
+  Result.OwnerStr:=EmptyStr;
+  if FindFirstUTF8(aPath, faAnyFile, sr)=0 then
+  try
+    Result.Found:=True;
+    Result.Size:=sr.Size;
+    // DOS timestamps: 2-second granularity, plenty for a card display
+    Result.ModTime:=FileDateToDateTime(sr.Time);
+  finally
+    FindCloseUTF8(sr);
+  end;
+end;
+{$ENDIF}
 
 class function TShellThread.FormatPath(const aPath: String): String;
 begin

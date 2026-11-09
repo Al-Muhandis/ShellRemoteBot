@@ -15,7 +15,12 @@ You can specify predefined shell scripts. Create script file with extention `.sc
 Get the script menu by command `/scripts`. Click the selected script.
 
 ## File manager
-You can call the file manager by `/dir` command then select directory inline button (select another folder) or file inline button (select the file to download).
+You can call the file manager by `/dir` command then select directory inline button (select another folder) or file inline button.
+
+Clicking a file does not download it right away: the listing is replaced (edited) with a **file card** showing the file name, its human-readable size (B/K/M/G/T), the modification time and, on Unix, also the rights (octal mode) and the numeric owner (`uid:gid`). The card offers three actions:
+- `⬇ Download` — sends the file as a document. Files larger than 50 MB (the Bot API limit) are refused with a hint to split or zip them via the shell instead, nothing is uploaded;
+- `🗑 Delete` — the same mandatory Ok/Cancel confirmation as `/delete`; after a successful delete the bot reopens the parent folder listing instead of a separate "deleted" note;
+- `◀ Back` — reopens the parent folder listing on the same page the card was opened from.
 
 You can set the default value in the configuration file (`DefaultDir` in `[File]` section)
 
@@ -127,7 +132,7 @@ or you can set the folder in the settings in the the `[Scripts]` section / `Dire
 ### /dir
 Calls the file Manager. You can set the default value in the configuration file
 ### /delete
-With the command (`/delete` `/fullpath/to/file`) You can delete file. The bot checks the file exists and asks for confirmation with the Ok/Cancel inline buttons; the file is deleted only after Ok. The confirmation expires together with the temporary path references (see File manager).
+With the command (`/delete` `/fullpath/to/file`) You can delete file. The bot checks the file exists and asks for confirmation with the Ok/Cancel inline buttons; the file is deleted only after Ok, and the bot then shows the parent folder listing instead of a separate "deleted" note. The confirmation expires together with the temporary path references (see File manager).
 
 ## Possible problems
 

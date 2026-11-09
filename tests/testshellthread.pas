@@ -34,6 +34,28 @@ type
     {$ENDIF}
   end;
 
+  { TTestFileCardHelpers }
+
+  TTestFileCardHelpers = class(TTestCase)
+  published
+    procedure TestFormatFileSizeWholeBytes;
+    procedure TestFormatFileSizeScaled;
+    procedure TestFormatFileSizeLargestUnitTakesAll;
+    procedure TestModeToOctalPadsLeadingZero;
+    procedure TestModeToOctalSpecialBits;
+    procedure TestClampPageOffsetKeepsFittingPage;
+    procedure TestClampPageOffsetReturnsToLastPage;
+    procedure TestClampPageOffsetEmptyOrInvalid;
+  end;
+
+  { TTestFileCardKeyboard }
+
+  TTestFileCardKeyboard = class(TTestCase)
+  published
+    procedure TestThreeButtonsInOneRow;
+    procedure TestButtonsCarryVerbsAndStyles;
+  end;
+
 implementation
 
 { TTestDeleteConfirmMarkup }
@@ -175,8 +197,127 @@ begin
 end;
 {$ENDIF}
 
+{ TTestFileCardHelpers }
+
+procedure TTestFileCardHelpers.TestFormatFileSizeWholeBytes;
+begin
+  // under 1 KiB the count stays in whole bytes, no '.0' noise
+  AssertEquals('0 B', FormatFileSize(0));
+  AssertEquals('1 B', FormatFileSize(1));
+  AssertEquals('511 B', FormatFileSize(511));
+  AssertEquals('1023 B', FormatFileSize(1023));
+end;
+
+procedure TTestFileCardHelpers.TestFormatFileSizeScaled;
+begin
+  // scaled units are 1024-based with exactly one decimal digit, floor-rounded
+  AssertEquals('1.0 K', FormatFileSize(1024));
+  AssertEquals('1.5 K', FormatFileSize(1536));
+  AssertEquals('1023.9 K', FormatFileSize(1024*1024-1));
+  AssertEquals('1.0 M', FormatFileSize(1024*1024));
+  AssertEquals('1.5 M', FormatFileSize(1536*1024));
+  AssertEquals('1.0 G', FormatFileSize(1024*1024*1024));
+end;
+
+procedure TTestFileCardHelpers.TestFormatFileSizeLargestUnitTakesAll;
+begin
+  // everything past T stays in T: servers do hold such files and the UI
+  // ladder stops here on purpose
+  AssertEquals('1.0 T', FormatFileSize(Int64(1024)*1024*1024*1024));
+  AssertEquals('2.0 T', FormatFileSize(Int64(2048)*1024*1024*1024));
+end;
+
+procedure TTestFileCardHelpers.TestModeToOctalPadsLeadingZero;
+begin
+  // the leading zero is part of the display, 644 alone reads wrong
+  AssertEquals('0000', ModeToOctal(0));
+  AssertEquals('0644', ModeToOctal($1A4));
+  AssertEquals('0755', ModeToOctal($1ED));
+end;
+
+procedure TTestFileCardHelpers.TestModeToOctalSpecialBits;
+begin
+  // suid/sgid/sticky live in the 4th octal digit: they must not be lost
+  AssertEquals('4755', ModeToOctal($9ED));
+  AssertEquals('1777', ModeToOctal($3FF));
+end;
+
+procedure TTestFileCardHelpers.TestClampPageOffsetKeepsFittingPage;
+begin
+  // a valid offset (a page that has entries) must survive untouched
+  AssertEquals(0, ClampPageOffset(50, 0, 90));
+  AssertEquals(90, ClampPageOffset(100, 90, 90));
+  AssertEquals(90, ClampPageOffset(95, 90, 90));
+end;
+
+procedure TTestFileCardHelpers.TestClampPageOffsetReturnsToLastPage;
+begin
+  // an offset past the end (a delete emptied the last page) lands on the
+  // last page that still has entries
+  AssertEquals(0, ClampPageOffset(50, 90, 90));
+  AssertEquals(90, ClampPageOffset(100, 180, 90));
+  // a single remaining entry only fills page 0, however far the old
+  // offset pointed
+  AssertEquals(0, ClampPageOffset(1, 90, 90));
+end;
+
+procedure TTestFileCardHelpers.TestClampPageOffsetEmptyOrInvalid;
+begin
+  AssertEquals(0, ClampPageOffset(0, 90, 90));
+  AssertEquals(0, ClampPageOffset(-1, 90, 90));
+  AssertEquals(0, ClampPageOffset(50, 90, 0));
+end;
+
+{ TTestFileCardKeyboard }
+
+procedure TTestFileCardKeyboard.TestThreeButtonsInOneRow;
+var
+  Keyboard: TInlineKeyboard;
+  Row: TInlineKeyboardButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    BuildFileCardKeyboard('11', '12', '13', Keyboard);
+    AssertEquals('actions share one row', 1, Keyboard.Count);
+    Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
+    AssertEquals(3, Row.Count);
+    // expected values are spelled out: the test pins the exact Bot API wire
+    // values, not what the shellthread constants happen to expand to
+    AssertEquals('⬇ Download', TInlineKeyboardButton(Row.Items[0]).text);
+    AssertEquals('🗑 Delete', TInlineKeyboardButton(Row.Items[1]).text);
+    AssertEquals('◀ Back', TInlineKeyboardButton(Row.Items[2]).text);
+  finally
+    Keyboard.Free;
+  end;
+end;
+
+procedure TTestFileCardKeyboard.TestButtonsCarryVerbsAndStyles;
+var
+  Keyboard: TInlineKeyboard;
+  Row: TInlineKeyboardButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    BuildFileCardKeyboard('11', '12', '13', Keyboard);
+    Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
+    // download is the positive action, delete the destructive one, back the
+    // neutral escape route; delete only ASKS (askdelete): the deletion itself
+    // is performed by the Ok button of the confirmation, never by the card
+    AssertEquals('download 11', TInlineKeyboardButton(Row.Items[0]).callback_data);
+    AssertEquals('success', TInlineKeyboardButton(Row.Items[0]).Style);
+    AssertEquals('askdelete 12', TInlineKeyboardButton(Row.Items[1]).callback_data);
+    AssertEquals('danger', TInlineKeyboardButton(Row.Items[1]).Style);
+    AssertEquals('dir 13', TInlineKeyboardButton(Row.Items[2]).callback_data);
+    AssertEquals('primary', TInlineKeyboardButton(Row.Items[2]).Style);
+  finally
+    Keyboard.Free;
+  end;
+end;
+
 initialization
   RegisterTest(TTestDeleteConfirmMarkup);
   RegisterTest(TTestBotCommandList);
+  RegisterTest(TTestFileCardHelpers);
+  RegisterTest(TTestFileCardKeyboard);
 
 end.
