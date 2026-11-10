@@ -110,6 +110,11 @@ type
     function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
     procedure DirHandler(const aPath: String; aOffset: Integer = 0);
+    { Sends the /dir listing as a rich message (Bot API 10.1+, [API]
+      RichMessages=true): the same markdown text, the inline keyboard mirrored
+      into rich buttons blocks. On a failed send it falls back to the classic
+      sendMessage with the very same markup, logging the reason }
+    function SendRichListing(const AText: String; AReplyMarkup: TReplyMarkup): Boolean;
     procedure SplitPageToken(const AValue: String; out APath: String; out AOffset: Integer);
     { Opens the file card in place of the listing; aOffset keeps the page of
       the listing the card was opened from }
@@ -178,6 +183,18 @@ function ModeToOctal(AMode: LongWord): String;
   went past the end: a delete can leave the stored page empty. ATotal<=0 (and
   a non-positive page size) always yields 0 }
 function ClampPageOffset(ATotal, AOffset, APageSize: Integer): Integer;
+
+{ Picks the input text of a message: the plain Text when present, otherwise
+  the PlainText of a rich message (Bot API 10.1+, sent by the fresh Telegram
+  clients when the user styles the input). Classic clients always fill Text,
+  so for them the result is exactly what it used to be }
+function MessageInputText(AMessage: TTelegramMessageObj): String;
+
+{ Builds a rich message (Bot API 10.1+) out of the listing markdown and its
+  inline keyboard: the text travels as markdown, every keyboard row becomes
+  a rich buttons block whose callback buttons keep text, callback data and
+  the Bot API 10.3 style }
+function CreateRichListing(const AText: String; AKeyboard: TInlineKeyboard): TInputRichMessage;
 
 { Fills ACommands with the bot command menu: Telegram clients show it in the
   menu button, so every handler is discoverable without reading the docs.
@@ -279,7 +296,7 @@ var
   aTmpFile: String;
   aTmpStream: TFileStream;
   aDocSize: Int64;
-  aNewContent: String;
+  aNewContent, aReplyText: String;
 begin
   if not CommandStart then
     Exit;
@@ -332,17 +349,19 @@ begin
         DeleteFileUTF8(aTmpFile);
       end;
     end
-    else if (AMessage.Text<>'/cancel') and (AMessage.Text<>EmptyStr) then
-    begin
-      // text reply: use as new content
-      SaveEdit(aEditFile, aOrigContent, AMessage.Text);
-    end
     else
     begin
-      // /cancel or empty reply
-      ClearPendingEdit(FBot.CurrentChatId);
-      ConfirmDone('Edit cancelled');
-      Exit;
+      // text reply (plain, or rich Bot API 10.1+): use as new content
+      aReplyText:=MessageInputText(AMessage);
+      if (aReplyText<>'/cancel') and (aReplyText<>EmptyStr) then
+        SaveEdit(aEditFile, aOrigContent, aReplyText)
+      else
+      begin
+        // /cancel or empty reply
+        ClearPendingEdit(FBot.CurrentChatId);
+        ConfirmDone('Edit cancelled');
+        Exit;
+      end;
     end;
     ClearPendingEdit(FBot.CurrentChatId);
     Exit;
@@ -360,7 +379,7 @@ begin
     end;
     Exit;
   end;
-  InputString:=AMessage.Text;
+  InputString:=MessageInputText(AMessage);
   if InputString=EmptyStr then
     Exit;
   // /cancel from the user: clear any pending edit state
@@ -567,6 +586,42 @@ begin
   Result:=((ATotal-1) div APageSize)*APageSize; // the last non-empty page
   if AOffset<Result then
     Result:=AOffset;
+end;
+
+function MessageInputText(AMessage: TTelegramMessageObj): String;
+begin
+  Result:=AMessage.Text;
+  if Result<>EmptyStr then
+    Exit;
+  // rich messages (Bot API 10.1+) arrive without a plain text field: the
+  // PlainText of the blocks is the closest classic equivalent, otherwise the
+  // command would be lost
+  if Assigned(AMessage.RichMessage) then
+    Result:=AMessage.RichMessage.PlainText;
+end;
+
+function CreateRichListing(const AText: String; AKeyboard: TInlineKeyboard): TInputRichMessage;
+var
+  i, j: Integer;
+  aRow: TInlineKeyboardButtons;
+  aBlock: TInputRichBlockButtons;
+  aSrc: TInlineKeyboardButton;
+  aDst: TRichMessageButton;
+begin
+  Result:=TInputRichMessage.CreateFromMarkdown(AText);
+  if not Assigned(AKeyboard) then
+    Exit;
+  for i:=0 to AKeyboard.Count-1 do
+  begin
+    aRow:=TInlineKeyboardButtons(AKeyboard.Items[i]);
+    aBlock:=Result.AddButtonsBlock;
+    for j:=0 to aRow.Count-1 do
+    begin
+      aSrc:=TInlineKeyboardButton(aRow.Items[j]);
+      aDst:=aBlock.Buttons.AddCallbackButton(aSrc.text, aSrc.callback_data);
+      aDst.Style:=aSrc.Style;
+    end;
+  end;
 end;
 
 procedure BuildBotCommands(ACommands: TBotCommandArray);
@@ -1326,11 +1381,36 @@ begin
     if IsCallback then
       ConfirmDone(s, aReplyMarkup, pmMarkdown)
     else
-      FBot.sendMessage(s, pmMarkdown, True, aReplyMarkup);
+      // a fresh listing is the one place a rich message pays off: the page
+      // updates stay classic edits, so old clients are never broken
+      if Cnfg.RichMessages then
+        SendRichListing(s, aReplyMarkup)
+      else
+        FBot.sendMessage(s, pmMarkdown, True, aReplyMarkup);
   finally
     aReplyMarkup.Free;
     aDirs.Free;
     aFiles.Free;
+  end;
+end;
+
+function TShellThread.SendRichListing(const AText: String; AReplyMarkup: TReplyMarkup): Boolean;
+var
+  aRich: TInputRichMessage;
+begin
+  aRich:=CreateRichListing(AText, AReplyMarkup.InlineKeyBoard);
+  try
+    Result:=FBot.sendRichMessage(FBot.CurrentChatId, aRich);
+    if not Result then
+    begin
+      // an old Bot API endpoint or a rejected rich payload must not lose
+      // the listing: the classic markup is already assembled
+      Logger.Info('[SendRichListing] sendRichMessage failed (error '+
+        IntToStr(FBot.LastErrorCode)+'), falling back to the classic listing');
+      FBot.sendMessage(AText, pmMarkdown, True, AReplyMarkup);
+    end;
+  finally
+    aRich.Free;
   end;
 end;
 

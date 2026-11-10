@@ -29,6 +29,9 @@ type
     procedure TestSilentForNonAdminsDefault;
     procedure TestSilentForNonAdminsEnabled;
     procedure TestSilentForNonAdminsNumericOne;
+    procedure TestRichMessagesDefault;
+    procedure TestRichMessagesEnabled;
+    procedure TestRichMessagesOffSpelling;
   end;
 
 implementation
@@ -151,6 +154,63 @@ begin
     Cfg:=TConfig.Create(Path);
     try
       AssertTrue(Cfg.SilentForNonAdmins);
+    finally
+      Cfg.Free;
+    end;
+  finally
+    DeleteFileUTF8(Path);
+  end;
+end;
+
+procedure TTestConfig.TestRichMessagesDefault;
+var
+  Cfg: TConfig;
+  Path: String;
+begin
+  // absent option keeps the classic listings: rich messages are opt-in
+  // because fresh Telegram clients only render them correctly
+  Path:=WriteIni('[API]'+LineEnding+'Token=x'+LineEnding);
+  try
+    Cfg:=TConfig.Create(Path);
+    try
+      AssertFalse(Cfg.RichMessages);
+    finally
+      Cfg.Free;
+    end;
+  finally
+    DeleteFileUTF8(Path);
+  end;
+end;
+
+procedure TTestConfig.TestRichMessagesEnabled;
+var
+  Cfg: TConfig;
+  Path: String;
+begin
+  Path:=WriteIni('[API]'+LineEnding+'RichMessages=true'+LineEnding);
+  try
+    Cfg:=TConfig.Create(Path);
+    try
+      AssertTrue(Cfg.RichMessages);
+    finally
+      Cfg.Free;
+    end;
+  finally
+    DeleteFileUTF8(Path);
+  end;
+end;
+
+procedure TTestConfig.TestRichMessagesOffSpelling;
+var
+  Cfg: TConfig;
+  Path: String;
+begin
+  // 'false' and any unrecognized spelling keep the flag off
+  Path:=WriteIni('[API]'+LineEnding+'RichMessages=maybe'+LineEnding);
+  try
+    Cfg:=TConfig.Create(Path);
+    try
+      AssertFalse(Cfg.RichMessages);
     finally
       Cfg.Free;
     end;

@@ -29,6 +29,9 @@ Big folders are split into pages navigated with the ◀️ / ▶️ buttons (90 
 
 The inline buttons keep temporary references to the listed paths, they do not survive a bot restart: after an upgrade an old listing answers `Listing is outdated. Call /dir again` and you simply call `/dir` again.
 
+### Rich /dir listing (optional)
+Set `RichMessages=true` in the `[API]` section and a fresh `/dir` listing is sent as a rich message (Bot API 10.1+): the same markdown header with the listing keyboard mirrored into rich buttons. If the rich send fails (an old Bot API endpoint, a rejected payload), the bot automatically falls back to the classic `sendMessage` with the very same markup and logs the reason. Page updates (◀️ / ▶️) stay classic message edits, so listings keep working on old Telegram clients regardless of this setting.
+
 ## Installation
 
 1. Create bot https://core.telegram.org/bots/#3-how-do-i-create-a-bot . You must select (keep default) longpolling method for getting updates.
@@ -42,6 +45,11 @@ Token=
 Endpoint=https://api.telegram.org/bot
 ;; Timeout for longpolling requests while getting updates
 Timeout=20
+;; true: the /dir listing is sent as a rich message (Bot API 10.1+).
+;; Rich messages render properly only on fresh Telegram clients, so this
+;; is opt-in (default false) and every failed rich send falls back to the
+;; classic listing automatically
+RichMessages=false
 
 [Users]
 ;; Specify all admin users (Telegram UserID [Integer]). For example:
@@ -117,6 +125,8 @@ There are some ways to determine your user_id but You can simply send `/myid` to
 
 ## Telegram bot commands
 Any text message that is not a command is written to the shell stdin as is, and the shell output is sent back (long output is split into several UTF-8 safe messages).
+
+Messages styled by the fresh Telegram clients arrive as rich messages (Bot API 10.1+) with no plain text field. The bot reads their plain text content instead, so shell input and text replies (e.g. the answer to an edit prompt) keep working. The text of the confirmation buttons and the callback flows is unaffected: it is read from the callback data, not from the message.
 
 On start the bot registers its commands in the Telegram command menu (`setMyCommands`): the menu button of the clients shows `/dir`, `/scripts`, `/read` and `/delete` with short descriptions, and `/sig` as well on Unix. A failed registration is only logged and never prevents the bot from starting.
 ### /read

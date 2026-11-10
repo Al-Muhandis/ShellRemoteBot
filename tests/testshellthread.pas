@@ -5,7 +5,8 @@ unit testshellthread;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry, fpjson, tgsendertypes, shellthread
+  Classes, SysUtils, fpcunit, testregistry, fpjson, tgtypes, tgsendertypes,
+  shellthread
   ;
 
 type
@@ -75,6 +76,32 @@ type
     {$ELSE}
     procedure TestOnlyReadButtonOutsideUnix;
     {$ENDIF}
+  end;
+
+  { TTestRichMessageInput }
+
+  TTestRichMessageInput = class(TTestCase)
+  private
+    { Builds a TTelegramMessageObj from the update JSON as the Bot API
+      delivers it (message_id, date and chat are read unconditionally by the
+      fp-telegram constructor) }
+    function MakeMessage(const AJSON: String): TTelegramMessageObj;
+  published
+    procedure TestPlainTextInput;
+    procedure TestRichMessagePlainTextFallback;
+    procedure TestRichMessageBlocksJoinedWithLineEndings;
+    procedure TestNoTextNoRichYieldsEmpty;
+    procedure TestPlainTextPreferredOverRich;
+  end;
+
+  { TTestRichListing }
+
+  TTestRichListing = class(TTestCase)
+  published
+    procedure TestTextTravelsAsMarkdown;
+    procedure TestKeyboardRowsMirroredToButtonsBlocks;
+    procedure TestKeyboardStylesCopied;
+    procedure TestNilKeyboardYieldsNoButtonsBlocks;
   end;
 
 implementation
@@ -459,6 +486,182 @@ begin
 end;
 {$ENDIF}
 
+{ TTestRichMessageInput }
+
+function TTestRichMessageInput.MakeMessage(const AJSON: String): TTelegramMessageObj;
+var
+  aJSONData: TJSONData;
+begin
+  // the fp-telegram constructor clones the JSON, so the parsed copy is
+  // freed right away and only the message object survives
+  aJSONData:=GetJSON(AJSON);
+  try
+    Result:=TTelegramMessageObj.Create(aJSONData as TJSONObject);
+  finally
+    aJSONData.Free;
+  end;
+end;
+
+procedure TTestRichMessageInput.TestPlainTextInput;
+var
+  Msg: TTelegramMessageObj;
+begin
+  // a classic client message: the text passes through untouched
+  Msg:=MakeMessage('{"message_id":1,"date":0,"chat":{"id":1},"text":"ls -la"}');
+  try
+    AssertEquals('ls -la', MessageInputText(Msg));
+  finally
+    Msg.Free;
+  end;
+end;
+
+procedure TTestRichMessageInput.TestRichMessagePlainTextFallback;
+var
+  Msg: TTelegramMessageObj;
+begin
+  // a styled message of a fresh client (Bot API 10.1+): no text field, the
+  // command lives in the rich message blocks
+  Msg:=MakeMessage('{"message_id":2,"date":0,"chat":{"id":1},' +
+    '"rich_message":{"blocks":[{"type":"text","text":"echo hi"}]}}');
+  try
+    AssertEquals('echo hi', MessageInputText(Msg));
+  finally
+    Msg.Free;
+  end;
+end;
+
+procedure TTestRichMessageInput.TestRichMessageBlocksJoinedWithLineEndings;
+var
+  Msg: TTelegramMessageObj;
+begin
+  // several text blocks read as one input, line-joined like the PlainText
+  // of the fp-telegram rich message does
+  Msg:=MakeMessage('{"message_id":3,"date":0,"chat":{"id":1},' +
+    '"rich_message":{"blocks":[{"type":"text","text":"echo"},' +
+    '{"type":"text","text":"hi"}]}}');
+  try
+    AssertEquals('echo'+LineEnding+'hi', MessageInputText(Msg));
+  finally
+    Msg.Free;
+  end;
+end;
+
+procedure TTestRichMessageInput.TestNoTextNoRichYieldsEmpty;
+var
+  Msg: TTelegramMessageObj;
+begin
+  // neither text nor rich message (a sticker, a service message): the
+  // caller must see the empty string it used to see
+  Msg:=MakeMessage('{"message_id":4,"date":0,"chat":{"id":1}}');
+  try
+    AssertEquals('', MessageInputText(Msg));
+  finally
+    Msg.Free;
+  end;
+end;
+
+procedure TTestRichMessageInput.TestPlainTextPreferredOverRich;
+var
+  Msg: TTelegramMessageObj;
+begin
+  // the plain text wins when both are present: it is the authoritative
+  // content, the rich blocks are only the fallback
+  Msg:=MakeMessage('{"message_id":5,"date":0,"chat":{"id":1},"text":"plain",' +
+    '"rich_message":{"blocks":[{"type":"text","text":"rich"}]}}');
+  try
+    AssertEquals('plain', MessageInputText(Msg));
+  finally
+    Msg.Free;
+  end;
+end;
+
+{ TTestRichListing }
+
+procedure TTestRichListing.TestTextTravelsAsMarkdown;
+var
+  Rich: TInputRichMessage;
+begin
+  Rich:=CreateRichListing('📁 /tmp/ 📁', nil);
+  try
+    AssertEquals('📁 /tmp/ 📁', Rich.Markdown);
+  finally
+    Rich.Free;
+  end;
+end;
+
+procedure TTestRichListing.TestKeyboardRowsMirroredToButtonsBlocks;
+var
+  Keyboard: TInlineKeyboard;
+  Rich: TInputRichMessage;
+  Blocks: TJSONArray;
+  aBlock: TInputRichBlockButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    // the confirmation row: Ok + Cancel, one keyboard row
+    BuildDeleteConfirmKeyboard('42', Keyboard);
+    Rich:=CreateRichListing('listing', Keyboard);
+    try
+      // the markdown text must survive the blocks being added
+      AssertEquals('listing', Rich.Markdown);
+      Blocks:=Rich.Blocks;
+      AssertTrue('buttons blocks mirror the keyboard rows', Assigned(Blocks));
+      AssertEquals(Keyboard.Count, Blocks.Count);
+      aBlock:=TInputRichBlockButtons(Blocks.Items[0]);
+      AssertEquals('buttons', aBlock.Strings['type']);
+      AssertEquals(2, aBlock.Buttons.Count);
+      AssertEquals('Ok', TRichMessageButton(aBlock.Buttons.Items[0]).text);
+      AssertEquals('delete 42', TRichMessageButton(aBlock.Buttons.Items[0]).callback_data);
+      AssertEquals('Cancel', TRichMessageButton(aBlock.Buttons.Items[1]).text);
+      AssertEquals('cancel', TRichMessageButton(aBlock.Buttons.Items[1]).callback_data);
+    finally
+      Rich.Free;
+    end;
+  finally
+    Keyboard.Free;
+  end;
+end;
+
+procedure TTestRichListing.TestKeyboardStylesCopied;
+var
+  Keyboard: TInlineKeyboard;
+  Rich: TInputRichMessage;
+  aBlock: TInputRichBlockButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    // the file card row carries all three styles (Bot API 10.3)
+    BuildFileCardKeyboard('11', '12', '13', '14', Keyboard);
+    Rich:=CreateRichListing('card', Keyboard);
+    try
+      aBlock:=TInputRichBlockButtons(Rich.Blocks.Items[0]);
+      AssertEquals(4, aBlock.Buttons.Count);
+      AssertEquals('success', TRichMessageButton(aBlock.Buttons.Items[0]).Style);
+      AssertEquals('primary', TRichMessageButton(aBlock.Buttons.Items[1]).Style);
+      AssertEquals('danger', TRichMessageButton(aBlock.Buttons.Items[2]).Style);
+      AssertEquals('primary', TRichMessageButton(aBlock.Buttons.Items[3]).Style);
+    finally
+      Rich.Free;
+    end;
+  finally
+    Keyboard.Free;
+  end;
+end;
+
+procedure TTestRichListing.TestNilKeyboardYieldsNoButtonsBlocks;
+var
+  Rich: TInputRichMessage;
+begin
+  Rich:=CreateRichListing('no keyboard', nil);
+  try
+    // no keyboard, no blocks: the rich message keeps only the markdown, the
+    // API accepts exactly one of the content forms being extended
+    AssertTrue('no buttons block without a keyboard', not Assigned(Rich.Blocks));
+  finally
+    Rich.Free;
+  end;
+end;
+
 initialization
   RegisterTest(TTestDeleteConfirmMarkup);
   RegisterTest(TTestBotCommandList);
@@ -466,5 +669,7 @@ initialization
   RegisterTest(TTestFileCardKeyboard);
   RegisterTest(TTestRevertConfirmKeyboard);
   RegisterTest(TTestRunPanelKeyboard);
+  RegisterTest(TTestRichMessageInput);
+  RegisterTest(TTestRichListing);
 
 end.

@@ -26,6 +26,7 @@ type
     function GetHTTPProxyUser: String;
     function GetScriptsDirectory: String;
     function GetServiceUser: Int64;
+    function GetRichMessages: Boolean;
     function GetSilentForNonAdmins: Boolean;
     function GetUsers(UserID: Int64): TUserStatus;
     function GetUserList: TStrings;
@@ -46,6 +47,10 @@ type
     property HTTPProxyPswd: String read GetHTTPProxyPswd;
     property ScriptsDirectory: String read GetScriptsDirectory;
     property DefaultDir: String read GetDefaultDir;
+    { true: the /dir listing is sent as a rich message (Bot API 10.1+),
+      falling back to the classic sendMessage on failure. Rich messages
+      render properly only on fresh Telegram clients, so this is opt-in }
+    property RichMessages: Boolean read GetRichMessages;
   end;
 
 var
@@ -59,6 +64,20 @@ uses
 
 var
   CnfDir: String;
+
+{ FPC ReadBool understands '1' only (CharToBool), so parse the common
+  spellings explicitly; anything else keeps ADefault }
+function ReadFlexibleBool(AIni: TMemIniFile; const ASection, AKey: String;
+  ADefault: Boolean): Boolean;
+var
+  s: String;
+begin
+  s:=Lowercase(AIni.ReadString(ASection, AKey, EmptyStr));
+  if s=EmptyStr then
+    Result:=ADefault
+  else
+    Result:=(s='1') or (s='true') or (s='yes') or (s='on');
+end;
 
 { TConfig }
 
@@ -112,14 +131,16 @@ begin
   Result:=FIni.ReadInt64('Service', 'User', 0);
 end;
 
-function TConfig.GetSilentForNonAdmins: Boolean;
-var
-  s: String;
+function TConfig.GetRichMessages: Boolean;
 begin
-  // FPC ReadBool understands '1' only (CharToBool), so parse the common
-  // spellings explicitly; anything else (or absent) keeps bots answering
-  s:=Lowercase(FIni.ReadString('Users', 'SilentForNonAdmins', EmptyStr));
-  Result:=(s='1') or (s='true') or (s='yes') or (s='on');
+  // opt-in: rich messages render properly only on fresh Telegram clients
+  Result:=ReadFlexibleBool(FIni, 'API', 'RichMessages', False);
+end;
+
+function TConfig.GetSilentForNonAdmins: Boolean;
+begin
+  // absent (or unrecognized) option keeps bots answering non-admins
+  Result:=ReadFlexibleBool(FIni, 'Users', 'SilentForNonAdmins', False);
 end;
 
 function TConfig.GetUsers(UserID: Int64): TUserStatus;
