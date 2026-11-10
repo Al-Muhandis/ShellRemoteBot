@@ -17,8 +17,9 @@ Get the script menu by command `/scripts`. Click the selected script.
 ## File manager
 You can call the file manager by `/dir` command then select directory inline button (select another folder) or file inline button.
 
-Clicking a file does not download it right away: the listing is replaced (edited) with a **file card** showing the file name, its human-readable size (B/K/M/G/T), the modification time and, on Unix, also the rights (octal mode) and the numeric owner (`uid:gid`). The card offers three actions:
+Clicking a file does not download it right away: the listing is replaced (edited) with a **file card** showing the file name, its human-readable size (B/K/M/G/T), the modification time and, on Unix, also the rights (octal mode) and the numeric owner (`uid:gid`). The card offers four actions:
 - `⬇ Download` — sends the file as a document. Files larger than 50 MB (the Bot API limit) are refused with a hint to split or zip them via the shell instead, nothing is uploaded;
+- `✏ Edit` — opens the file for inline editing (files up to 1 MB, plain text/UTF-8 only). The current content is shown; reply with the new text to overwrite it. A `.bak` copy is kept automatically — if anything goes wrong, the `↩ Revert` button on the confirmation screen restores the original;
 - `🗑 Delete` — the same mandatory Ok/Cancel confirmation as `/delete`; after a successful delete the bot reopens the parent folder listing instead of a separate "deleted" note;
 - `◀ Back` — reopens the parent folder listing on the same page the card was opened from.
 

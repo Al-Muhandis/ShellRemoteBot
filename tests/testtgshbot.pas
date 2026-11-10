@@ -5,7 +5,7 @@ unit testtgshbot;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry, tgshbot, LazUTF8
+  Classes, SysUtils, fpcunit, testregistry, tgshbot, LazUTF8, LazFileUtils
   ;
 
 const
@@ -39,6 +39,28 @@ type
     procedure TestPartLengthLimit;
     procedure TestKeepsUTF8CharactersWhole;
     procedure TestNonPositivePartLengthRaises;
+  end;
+
+  { TTestBackupPathFor }
+
+  TTestBackupPathFor = class(TTestCase)
+  published
+    procedure TestAppendsBakToSimpleName;
+    procedure TestAppendsBakToPathWithDir;
+  end;
+
+  { TTestTextFileValidation }
+
+  TTestTextFileValidation = class(TTestCase)
+  private
+    function MakeTestFile(const AContent: String): String;
+  published
+    procedure TestPlainAsciiTextIsValid;
+    procedure TestUtf8TextWithMultibyteCharsIsValid;
+    procedure TestEmptyFileIsValid;
+    procedure TestFileWithZeroByteIsInvalid;
+    procedure TestBinarySequencesAreInvalid;
+    procedure TestFileLargerThanLimitIsInvalid;
   end;
 
 implementation
@@ -227,8 +249,117 @@ begin
   end;
 end;
 
+{ TTestBackupPathFor }
+
+procedure TTestBackupPathFor.TestAppendsBakToSimpleName;
+begin
+  AssertEquals('/some/path/file.txt.bak', BackupPathFor('/some/path/file.txt'));
+end;
+
+procedure TTestBackupPathFor.TestAppendsBakToPathWithDir;
+begin
+  AssertEquals('myfile.bak', BackupPathFor('myfile'));
+end;
+
+{ TTestTextFileValidation }
+
+function TTestTextFileValidation.MakeTestFile(const AContent: String): String;
+begin
+  Result:=GetTempFileNameUTF8(GetTempDir, 'tgshd');
+  with TFileStream.Create(Result, fmCreate) do
+  try
+    if Length(AContent)>0 then
+      Write(AContent[1], Length(AContent));
+  finally
+    Free;
+  end;
+end;
+
+procedure TTestTextFileValidation.TestPlainAsciiTextIsValid;
+var
+  F: String;
+begin
+  F:=MakeTestFile('Hello, world!'+LineEnding+'Goodbye.');
+  try
+    AssertTrue('plain ASCII text should be valid', IsTextFile(F));
+  finally
+    DeleteFileUTF8(F);
+  end;
+end;
+
+procedure TTestTextFileValidation.TestUtf8TextWithMultibyteCharsIsValid;
+var
+  F: String;
+begin
+  F:=MakeTestFile('Hello, '+#209#128#209#129+' '+#$E2#$98#$83); // Cyrillic + snowman
+  try
+    AssertTrue('UTF-8 text should be valid', IsTextFile(F));
+  finally
+    DeleteFileUTF8(F);
+  end;
+end;
+
+procedure TTestTextFileValidation.TestEmptyFileIsValid;
+var
+  F: String;
+begin
+  F:=MakeTestFile(EmptyStr);
+  try
+    AssertTrue('empty file should be valid', IsTextFile(F));
+  finally
+    DeleteFileUTF8(F);
+  end;
+end;
+
+procedure TTestTextFileValidation.TestFileWithZeroByteIsInvalid;
+var
+  F: String;
+begin
+  F:=MakeTestFile('Hello'+#0+'world');
+  try
+    AssertFalse('file with #0 byte should be invalid', IsTextFile(F));
+  finally
+    DeleteFileUTF8(F);
+  end;
+end;
+
+procedure TTestTextFileValidation.TestBinarySequencesAreInvalid;
+var
+  F: String;
+begin
+  // 0x80 is a bare continuation byte with no leading byte — invalid UTF-8
+  F:=MakeTestFile('Hello'+#128+'world');
+  try
+    AssertFalse('bare continuation byte should be invalid', IsTextFile(F));
+  finally
+    DeleteFileUTF8(F);
+  end;
+end;
+
+procedure TTestTextFileValidation.TestFileLargerThanLimitIsInvalid;
+var
+  F: String;
+  Data: array[0.._MaxEditSize] of Byte; // _MaxEditSize + 1 bytes (over limit)
+  i: Integer;
+begin
+  // fill with 0x80 bytes (bare continuation byte — invalid UTF-8, and over size)
+  for i:=0 to High(Data) do
+    Data[i]:=$80;
+  F:=GetTempFileNameUTF8(GetTempDir, 'tgshd');
+  with TFileStream.Create(F, fmCreate) do
+  try
+    Write(Data, SizeOf(Data));
+  finally
+    Free;
+  end;
+  AssertFalse('file larger than 1 MB should be rejected', IsTextFile(F));
+  DeleteFileUTF8(F);
+end;
+
 initialization
   RegisterTest(TTestIsolateShellOutput);
   RegisterTest(TTestSplitUTF8Parts);
+  RegisterTest(TTestBackupPathFor);
+  RegisterTest(TTestTextFileValidation);
 
 end.

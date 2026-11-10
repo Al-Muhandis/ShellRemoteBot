@@ -29,6 +29,31 @@ type
 
 function IsolateShellOutput(const S: String): String;
 
+// ----- Text / UTF-8 validation ---------------------------------------------
+
+{ Maximum file size (1 MB) for text editing: the user must be able to hold the
+  original content in memory and send the replacement, so the Telegram document
+  limit of 50 MB is not the right ceiling here }
+const
+  _MaxEditSize = 1 * 1024 * 1024;
+
+{ Scans the first ACheckBytes bytes of ABuffer for validity as UTF-8.
+  Returns True when every byte is either a valid single-byte ASCII (< 128) or
+  a well-formed multibyte UTF-8 sequence, and no #0 occurs within the checked
+  prefix. ACheckBytes may be larger than Length(ABuffer) — the whole buffer is
+  then scanned. Used for the byte-by-byte UTF-8 check that precedes text editing. }
+function IsValidUtf8Buffer(const ABuffer; ABufferLen, ACheckBytes: PtrUInt): Boolean;
+
+{ Returns True when the file at AFilePath is a text file suitable for editing:
+  size is at most _MaxEditSize, it contains no #0 bytes in its first
+  _MaxEditSize bytes, and that prefix is valid UTF-8.
+  Raises no exceptions (assertions disabled inside for reliability). }
+function IsTextFile(const AFilePath: String): Boolean;
+
+{ Formats the backup file name for AFilePath: <name>.bak is appended to the
+  directory part, e.g. /home/user/data.txt -> /home/user/data.txt.bak }
+function BackupPathFor(const AFilePath: String): String;
+
 { Splits AMessage into parts of at most APartLength UTF-8 characters, never
   cutting inside a multibyte character: a byte cut would produce invalid
   UTF-8 and Telegram rejects such messages. The concatenation of the parts
@@ -48,6 +73,82 @@ begin
   // whole message would be rejected by Telegram: break it with zero-width space
   Result:='```log'+LineEnding+
     StringReplace(S, '```', '``'+#$E2#$80#$8B+'`', [rfReplaceAll])+LineEnding+'```';
+end;
+
+function IsValidUtf8Buffer(const ABuffer; ABufferLen, ACheckBytes: PtrUInt): Boolean;
+var
+  I: PtrUInt;
+  B: Byte;
+  SeqLen: Integer;
+const
+  MaxCheck = 64 * 1024; // scan at most 64 KB for #0 and UTF-8 validity
+begin
+  if ACheckBytes = 0 then
+    ACheckBytes := MaxCheck;
+  if ACheckBytes > ABufferLen then
+    ACheckBytes := ABufferLen;
+  I := 0;
+  while I < ACheckBytes do
+  begin
+    B := PByte(@ABuffer)[I];
+    Inc(I);
+    // #0 inside the checked prefix disqualifies the file as text
+    if B = 0 then
+      Exit(False);
+    // ASCII byte: valid UTF-8, move to next
+    if B < $80 then
+      Continue;
+    // Determine expected sequence length from the leading byte
+    if (B and $E0) = $C0 then
+      SeqLen := 2  // 110xxxxx: one continuation byte
+    else if (B and $F0) = $E0 then
+      SeqLen := 3  // 1110xxxx: two continuation bytes
+    else if (B and $F8) = $F0 then
+      SeqLen := 4  // 11110xxx: three continuation bytes
+    else
+      Exit(False); // invalid lead byte (10xxxxxx is orphan, or F5+ is invalid)
+    // Verify that enough bytes remain for the complete sequence
+    if I + PtrUInt(SeqLen - 1) > ACheckBytes then
+      Exit(False);
+    // Check continuation bytes
+    case SeqLen of
+      2: if (PByte(@ABuffer)[I] and $C0) <> $80 then Exit(False);
+      3: begin
+           if (PByte(@ABuffer)[I] and $C0) <> $80 then Exit(False);
+           if (PByte(@ABuffer)[I + 1] and $C0) <> $80 then Exit(False);
+         end;
+      4: begin
+           if (PByte(@ABuffer)[I] and $C0) <> $80 then Exit(False);
+           if (PByte(@ABuffer)[I + 1] and $C0) <> $80 then Exit(False);
+           if (PByte(@ABuffer)[I + 2] and $C0) <> $80 then Exit(False);
+         end;
+    end;
+    Inc(I, PtrUInt(SeqLen - 1));
+  end;
+  Result := True;
+end;
+
+function IsTextFile(const AFilePath: String): Boolean;
+var
+  f: TFileStream;
+  Buf: array[0..Pred(_MaxEditSize)] of Byte;
+  BytesRead: PtrUInt;
+begin
+  Result := False;
+  f := TFileStream.Create(AFilePath, fmOpenRead or fmShareDenyWrite);
+  try
+    if f.Size > _MaxEditSize then
+      Exit;
+    BytesRead := f.Read(Buf, SizeOf(Buf));
+    Result := IsValidUtf8Buffer(Buf, BytesRead, BytesRead);
+  finally
+    f.Free;
+  end;
+end;
+
+function BackupPathFor(const AFilePath: String): String;
+begin
+  Result := AFilePath + '.bak';
 end;
 
 procedure SplitUTF8Parts(const AMessage: String; APartLength: Integer;

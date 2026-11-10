@@ -34,7 +34,7 @@ type
     FBot: TTgShBot;
     FProc: TProcess;
     FPaths: TPathRefs;     // callback token -> full path (dirs, files, scripts)
-    FChatDirs: TStringList; // chat id -> current folder (also the pending upload folder)
+    FChatDirs: TStringList; // chat id -> current folder; pending edit when value contains _EditSep
     FLPTimeout: Integer;
     FShellOwnGroup: Boolean; // the shell leads its own process group (safe to killpg)
     FPanelToken: String;   // FPaths token of the live run panel; EmptyStr = none
@@ -72,8 +72,11 @@ type
     procedure CallbackDeleteAsk(const AToken: String);
     procedure CallbackDir(const AToken: String);
     procedure CallbackDownload(const AToken: String);
+    procedure CallbackEdit(const AToken: String);
     procedure CallbackFile(const AToken: String);
     procedure CallbackInput(const AToken: String);
+    procedure CallbackRevert(const AToken: String);
+    procedure CallbackRevertAsk(const AToken: String);
     procedure CallbackScript(const AToken: String);
     procedure CallbackPanelRead(const AToken: String);
     {$IFDEF UNIX}procedure CallbackPanelSignal(const AToken: String; ASignal: Byte);{$ENDIF}
@@ -87,6 +90,23 @@ type
     { Turns the live run panel into a plain Done note, retiring its buttons }
     procedure MarkPanelDone;
     function PathByToken(const AToken: String; out APath: String): Boolean;
+    { Pending edit state helpers: edit state is stored in FChatDirs as a string
+      containing _EditSep when an edit is in progress for the chat.
+      GetEditState returns (FilePath, OriginalContent, BackupPath); the
+      OriginalContent is empty when the state is not an edit state. }
+    function GetEditState(const AValue: String; out AFilePath, AOriginalContent,
+      ABackupPath: String): Boolean;
+    function IsPendingEdit(AChatId: Int64): Boolean;
+    procedure ClearPendingEdit(AChatId: Int64);
+    { Saves ANewContent to AFilePath, creating a .bak backup first.
+      Shows the result with a Revert button (dt_revertask). }
+    procedure SaveEdit(const AFilePath, AOriginalContent, ANewContent: String);
+    { Restores AFilePath from its .bak (Ask variant shows confirmation first).
+      After a successful revert the .bak is deleted and the listing is reopened. }
+    procedure DoRevert(const AFilePath, ABackupPath: String; AOffset: Integer);
+    { Shows the revert confirmation: Ok carries dt_revert + offset|filepath|backup
+      token, Cancel calls CallbackCancel which drops the pending state. }
+    procedure AskRevertConfirm(const AToken: String);
     function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
     procedure DirHandler(const aPath: String; aOffset: Integer = 0);
@@ -129,11 +149,15 @@ type
   delete verb plus the path token, both buttons carry Bot API 10.3 styles }
 procedure BuildDeleteConfirmKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
 
-{ Fills AKeyboard with the file card actions: download, delete and back to the
-  parent listing; every button carries its callback token and a Bot API 10.3
+{ Fills AKeyboard with the file card actions: download, edit, delete and back to
+  the parent listing; every button carries its callback token and a Bot API 10.3
   style }
-procedure BuildFileCardKeyboard(const ADownToken, ADeleteToken,
+procedure BuildFileCardKeyboard(const ADownToken, AEditToken, ADeleteToken,
   ABackToken: String; AKeyboard: TInlineKeyboard);
+
+{ Fills AKeyboard with the /revert confirmation row: the Ok button carries the
+  revert verb plus the token, both buttons carry Bot API 10.3 styles }
+procedure BuildRevertConfirmKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
 
 { Fills AKeyboard with the run panel actions of a long-running command:
   SIGINT and SIGKILL on UNIX only (signals are not deliverable elsewhere) and
@@ -200,14 +224,23 @@ const
   dt_dir='dir';
   dt_file='file';
   dt_down='download';
+  dt_edit='edit';
   dt_input='input';
   dt_dltask='askdelete';  // opens the confirmation; the deletion itself is
                           // only ever performed by dt_dlt after Ok
   dt_dlt='delete';
   dt_cancel='cancel';
+  dt_revertask='revertask';  // opens the revert confirmation; revert itself
+                             // only after Ok from dt_revert
+  dt_revert='revert';
   {%H-}dt_sigint='sigint';    // run panel buttons: the panel of a command with no
   {%H-}dt_sigkill='sigkill';  // output yet; the signal ones exist on UNIX only
   dt_read='read';
+
+  // Edit feature constants
+  _EditSep = '|';           // separator for pending edit state in FChatDirs:
+                            // '|<original_content>|<backup_path>'
+  _MaxEditContent = 3500;   // send inline when content fits this many chars
 
   // Bot API 10.3 button styles (TInlineKeyboardButton.Style); 'link' is the
   // remaining style of the set, unused so far. Named so no raw style strings
@@ -242,17 +275,85 @@ end;
 procedure TShellThread.BotReceiveMessage(ASender: TObject;
   AMessage: TTelegramMessageObj);
 var
-  InputString, aPath: String;
+  InputString, aPath, aEditFile, aOrigContent, aEditBackup: String;
+  aTmpFile: String;
+  aTmpStream: TFileStream;
+  aDocSize: Int64;
+  aNewContent: String;
 begin
   if not CommandStart then
     Exit;
+  if Assigned(AMessage.ReplyToMessage) and IsPendingEdit(FBot.CurrentChatId) and
+     GetChatDir(FBot.CurrentChatId, aPath) and
+     GetEditState(aPath, aEditFile, aOrigContent, aEditBackup) then
+  begin
+    // ----- user replied to the edit prompt -----
+    if Assigned(AMessage.Document) then
+    begin
+      // document reply: download, validate UTF-8, save
+      aTmpFile:=GetTempFileNameUTF8(GetTempDir, 'tgshd');
+      aNewContent:=EmptyStr;
+      try
+        if not FBot.getFile(AMessage.Document.FileID) then
+        begin
+          FBot.sendMessage(emj_Wrnng+' Failed to get the file');
+          Exit;
+        end;
+        aTmpStream:=TFileStream.Create(aTmpFile, fmCreate);
+        try
+          TFPHTTPClient.SimpleGet(FBot.FileObj.DownloadLink(FBot.Token), aTmpStream);
+        finally
+          aTmpStream.Free;
+        end;
+        // read the downloaded content into aNewContent
+        with TFileStream.Create(aTmpFile, fmOpenRead) do
+        try
+          aDocSize:=Size;
+          if aDocSize > _MaxEditSize then
+          begin
+            FBot.sendMessage(emj_Wrnng+' Downloaded file is '+
+              FormatFileSize(aDocSize)+', larger than 1 MB limit for editing');
+            Exit;
+          end;
+          SetLength(aNewContent, aDocSize);
+          if aDocSize > 0 then
+            Read(aNewContent[1], aDocSize);
+        finally
+          Free;
+        end;
+        if not IsTextFile(aTmpFile) then
+        begin
+          FBot.sendMessage(emj_Wrnng+' Downloaded file is not a valid UTF-8 text file');
+          Exit;
+        end;
+        // save with the downloaded content (aOrigContent is the original for backup)
+        SaveEdit(aEditFile, aOrigContent, aNewContent);
+      finally
+        DeleteFileUTF8(aTmpFile);
+      end;
+    end
+    else if (AMessage.Text<>'/cancel') and (AMessage.Text<>EmptyStr) then
+    begin
+      // text reply: use as new content
+      SaveEdit(aEditFile, aOrigContent, AMessage.Text);
+    end
+    else
+    begin
+      // /cancel or empty reply
+      ClearPendingEdit(FBot.CurrentChatId);
+      ConfirmDone('Edit cancelled');
+      Exit;
+    end;
+    ClearPendingEdit(FBot.CurrentChatId);
+    Exit;
+  end;
   if Assigned(AMessage.ReplyToMessage) then
   begin
     // the upload folder is kept per chat (set by the Upload... button),
     // no round-trip through the reply message text
     if Assigned(AMessage.Document) then
     begin
-      if GetChatDir(FBot.CurrentChatId, aPath) then
+      if GetChatDir(FBot.CurrentChatId, aPath) and (Pos(_EditSep, aPath)=0) then
         BotReceiveDocument(AMessage.Document, aPath)
       else
         FBot.sendMessage(emj_Wrnng+' No pending upload folder. Call /dir and press Upload...');
@@ -262,6 +363,18 @@ begin
   InputString:=AMessage.Text;
   if InputString=EmptyStr then
     Exit;
+  // /cancel from the user: clear any pending edit state
+  if InputString='/cancel' then
+  begin
+    if IsPendingEdit(FBot.CurrentChatId) then
+    begin
+      ClearPendingEdit(FBot.CurrentChatId);
+      ConfirmDone('Edit cancelled');
+    end
+    else
+      FBot.sendMessage('Nothing to cancel');
+    Exit;
+  end;
   InputString+=LineEnding;
   SendToShellTerminal(InputString);
 end;
@@ -321,9 +434,12 @@ begin
     dt_dir:     CallbackDir(aName);
     dt_file:    CallbackFile(aName);
     dt_down:    CallbackDownload(aName);
+    dt_edit:    CallbackEdit(aName);
     dt_input:   CallbackInput(aName);
     dt_dltask:  CallbackDeleteAsk(aName);
     dt_dlt:     CallbackDelete(aName);
+    dt_revertask: CallbackRevertAsk(aName);
+    dt_revert:  CallbackRevert(aName);
     {$IFDEF UNIX}
     dt_sigint:  CallbackPanelSignal(aName, SIGINT);
     dt_sigkill: CallbackPanelSignal(aName, SIGKILL);
@@ -349,24 +465,43 @@ begin
   AKeyboard.AddButton(aBtn, 2);
 end;
 
-procedure BuildFileCardKeyboard(const ADownToken, ADeleteToken,
+procedure BuildFileCardKeyboard(const ADownToken, AEditToken, ADeleteToken,
   ABackToken: String; AKeyboard: TInlineKeyboard);
 var
   aBtn: TInlineKeyboardButton;
 begin
-  // one row of three: the same MaxColsInRow trick the confirmation row uses
+  // one row of four: download is the positive action, edit is the main
+  // workflow, delete is destructive, back is the escape route
   aBtn:=TInlineKeyboardButton.Create('⬇ Download');
   aBtn.callback_data:=dt_down+' '+ADownToken;
   aBtn.Style:=btnStyleSuccess;
-  AKeyboard.AddButton(aBtn, 3);
+  AKeyboard.AddButton(aBtn, 4);
+  aBtn:=TInlineKeyboardButton.Create('✏ Edit');
+  aBtn.callback_data:=dt_edit+' '+AEditToken;
+  aBtn.Style:=btnStylePrimary;
+  AKeyboard.AddButton(aBtn, 4);
   aBtn:=TInlineKeyboardButton.Create('🗑 Delete');
   aBtn.callback_data:=dt_dltask+' '+ADeleteToken;
   aBtn.Style:=btnStyleDanger;
-  AKeyboard.AddButton(aBtn, 3);
+  AKeyboard.AddButton(aBtn, 4);
   aBtn:=TInlineKeyboardButton.Create('◀ Back');
   aBtn.callback_data:=dt_dir+' '+ABackToken;
   aBtn.Style:=btnStylePrimary;
-  AKeyboard.AddButton(aBtn, 3);
+  AKeyboard.AddButton(aBtn, 4);
+end;
+
+procedure BuildRevertConfirmKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
+var
+  aBtn: TInlineKeyboardButton;
+begin
+  aBtn:=TInlineKeyboardButton.Create('Ok');
+  aBtn.callback_data:=dt_revert+' '+AToken;
+  aBtn.Style:=btnStyleDanger;
+  AKeyboard.AddButton(aBtn, 2);
+  aBtn:=TInlineKeyboardButton.Create('Cancel');
+  aBtn.callback_data:=dt_cancel;
+  aBtn.Style:=btnStylePrimary;
+  AKeyboard.AddButton(aBtn, 2);
 end;
 
 procedure BuildRunPanelKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
@@ -615,6 +750,251 @@ begin
   end;
   SplitPageToken(aValue, aPath, aOffset);
   AskDeleteConfirm(aPath, aOffset);
+end;
+
+procedure TShellThread.CallbackEdit(const AToken: String);
+var
+  aPath, aContent, aBackupPath: String;
+  aReplyMarkup: TReplyMarkup;
+  aMsg, aDisplayedContent: String;
+  f: TFileStream;
+  aSize: Int64;
+  b: Byte;
+begin
+  if not PathByToken(AToken, aPath) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+    Exit;
+  end;
+  // ----- size check -----
+  aSize:=GetFileStatInfo(aPath).Size;
+  if aSize > _MaxEditSize then
+  begin
+    ConfirmDone(emj_Wrnng+' '+Format('File is %s, larger than %d MB. Edit is limited to files up to 1 MB.',
+      [FormatFileSize(aSize), _MaxEditSize div (1024*1024)]), nil, pmMarkdown);
+    Exit;
+  end;
+  // ----- text / UTF-8 validity check -----
+  if not IsTextFile(aPath) then
+  begin
+    ConfirmDone(emj_Wrnng+' File is not a valid UTF-8 text file (or contains #0 bytes). Only plain text files up to 1 MB can be edited.', nil, pmMarkdown);
+    Exit;
+  end;
+  // ----- read and show content -----
+  f:=TFileStream.Create(aPath, fmOpenRead or fmShareDenyWrite);
+  try
+    SetLength(aContent, f.Size);
+    if f.Size > 0 then
+      f.Read(aContent[1], f.Size);
+  finally
+    f.Free;
+  end;
+  // store pending edit state in FChatDirs: '|<original_content>|<backuppath>'
+  aBackupPath:=BackupPathFor(aPath);
+  SetChatDir(FBot.CurrentChatId, aPath+_EditSep+aContent+_EditSep+aBackupPath);
+  aReplyMarkup:=TReplyMarkup.Create;
+  try
+    aReplyMarkup.ForceReply:=True;
+    aReplyMarkup.InputFieldPlaceholder:='New file content';
+    if Length(aContent) <= _MaxEditContent then
+    begin
+      // show inline: fenced block without 'log' (plain text, not shell output)
+      aDisplayedContent:='```'+LineEnding+
+        StringReplace(aContent, '```', '``'+#$E2#$80#$8B+'`', [rfReplaceAll])+
+        LineEnding+'```';
+      FBot.sendMessage('✏ Editing: '+mdCode+ExtractFileName(aPath)+mdCode+LineEnding+
+        'Reply with the new content, or /cancel', pmMarkdown, True, aReplyMarkup);
+      // send the content as a follow-up (editing the same message would remove ForceReply)
+      FBot.sendMessage(aDisplayedContent, pmMarkdown);
+    end
+    else
+    begin
+      // too large to show inline: send as document and ask user to edit and re-upload
+      FBot.sendChatAction(FBot.CurrentChatId, caUploadDocument);
+      FBot.sendDocumentByFileName(FBot.CurrentChatId, aPath, ExtractFileDir(aPath));
+      FBot.sendMessage('✏ Editing: '+mdCode+ExtractFileName(aPath)+mdCode+LineEnding+
+        'Download the file, edit it, and send it back as a document reply, or /cancel',
+        pmMarkdown, True, aReplyMarkup);
+    end;
+  finally
+    aReplyMarkup.Free;
+  end;
+end;
+
+// ----- Pending edit state helpers -------------------------------------------
+
+{ Parses AValue as a pending edit state ('filepath|original_content|backuppath').
+  Returns True when AValue contains _EditSep and was successfully split; in that
+  case AFilePath, AOriginalContent and ABackupPath are filled. Returns False
+  when AValue is a plain path (e.g. from a pending upload folder), leaving all
+  output parameters empty. }
+function TShellThread.GetEditState(const AValue: String; out AFilePath,
+  AOriginalContent, ABackupPath: String): Boolean;
+var
+  p1, p2: Integer;
+begin
+  Result:=False;
+  AFilePath:=EmptyStr;
+  AOriginalContent:=EmptyStr;
+  ABackupPath:=EmptyStr;
+  p1:=Pos(_EditSep, AValue);
+  if p1<=0 then
+    Exit;
+  // format: 'filepath|<original_content>|<backuppath>'
+  // filepath spans from 1 to p1-1
+  // original_content from p1+1 to p2-1
+  // backuppath from p2+1 to end
+  AFilePath:=Copy(AValue, 1, p1-1);
+  p2:=PosEx(_EditSep, AValue, p1+1);
+  if p2<=p1 then
+    Exit;
+  AOriginalContent:=Copy(AValue, p1+1, p2-p1-1);
+  ABackupPath:=Copy(AValue, p2+1, MaxInt);
+  Result:=(AFilepath<>EmptyStr) and (ABackupPath<>EmptyStr);
+end;
+
+function TShellThread.IsPendingEdit(AChatId: Int64): Boolean;
+var
+  aValue, aFilePath, aContent, aBackup: String;
+begin
+  Result:=GetChatDir(AChatId, aValue) and
+    GetEditState(aValue, aFilePath, aContent, aBackup);
+end;
+
+procedure TShellThread.ClearPendingEdit(AChatId: Int64);
+begin
+  SetChatDir(AChatId, EmptyStr);
+end;
+
+// ----- Save edit (with backup) ----------------------------------------------
+
+procedure TShellThread.SaveEdit(const AFilePath, AOriginalContent,
+  ANewContent: String);
+var
+  aBackupPath: String;
+  aReplyMarkup: TReplyMarkup;
+begin
+  aBackupPath:=BackupPathFor(AFilePath);
+  // 1. write .bak backup
+  if not CopyFile(AFilePath, aBackupPath, False) then
+  begin
+    ConfirmDone(emj_Wrnng+' Failed to create backup '+aBackupPath, nil, pmMarkdown);
+    Exit;
+  end;
+  // 2. write new content
+  try
+    with TFileStream.Create(AFilePath, fmCreate) do
+    try
+      if Length(ANewContent)>0 then
+        Write(ANewContent[1], Length(ANewContent));
+    finally
+      Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      ConfirmDone(emj_Wrnng+' Failed to write file: '+E.Message, nil, pmMarkdown);
+      Exit;
+    end;
+  end;
+  // 3. show success with Revert button
+  aReplyMarkup:=TReplyMarkup.Create;
+  try
+    aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
+    // token: '0|<filepath>|<backuppath>' — offset 0 (no listing context here)
+    BuildRevertConfirmKeyboard(
+      AddPathRef('0'+_OfsSep+AFilePath+_EditSep+aBackupPath),
+      aReplyMarkup.InlineKeyBoard);
+    ConfirmDone('✏ File saved: '+mdCode+ExtractFileName(AFilePath)+mdCode+
+      ' — backup: '+mdCode+ExtractFileName(aBackupPath)+mdCode,
+      aReplyMarkup, pmMarkdown);
+  finally
+    aReplyMarkup.Free;
+  end;
+end;
+
+// ----- Revert flow ---------------------------------------------------------
+
+procedure TShellThread.AskRevertConfirm(const AToken: String);
+var
+  aReplyMarkup: TReplyMarkup;
+begin
+  aReplyMarkup:=TReplyMarkup.Create;
+  try
+    aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
+    BuildRevertConfirmKeyboard(AToken, aReplyMarkup.InlineKeyBoard);
+    ConfirmDone('↩ Revert to the backup and lose the changes?', aReplyMarkup);
+  finally
+    aReplyMarkup.Free;
+  end;
+end;
+
+procedure TShellThread.CallbackRevertAsk(const AToken: String);
+var
+  aValue, aPath, aBackupPath: String;
+  aOffset: Integer;
+begin
+  if not PathByToken(AToken, aValue) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+    Exit;
+  end;
+  // token format: '0|<filepath>|<backuppath>'
+  aOffset:=0;
+  aPath:=EmptyStr;
+  aBackupPath:=EmptyStr;
+  // parse: the token is 'offset|filepath|backuppath' where offset is before first _OfsSep
+  // and filepath|backuppath are separated by _EditSep
+  if Pos(_OfsSep, aValue)>0 then
+    SplitPageToken(aValue, aPath, aOffset);
+  // aPath is now 'filepath|backuppath' — extract the two parts
+  if not GetEditState(aPath, aPath,{%H-} aValue{unused}, aBackupPath) then
+  begin
+    // fallback: try BackupPathFor on aPath
+    aBackupPath:=BackupPathFor(aPath);
+  end;
+  AskRevertConfirm(AddPathRef(IntToStr(aOffset)+_OfsSep+aPath+_EditSep+aBackupPath));
+end;
+
+procedure TShellThread.DoRevert(const AFilePath, ABackupPath: String;
+  AOffset: Integer);
+var
+  aParent: String;
+begin
+  if not FileExistsUTF8(ABackupPath) then
+  begin
+    ConfirmDone(emj_Wrnng+' Backup file not found: '+ABackupPath, nil, pmMarkdown);
+    Exit;
+  end;
+  if not CopyFile(ABackupPath, AFilePath, False) then
+  begin
+    ConfirmDone(emj_Wrnng+' Failed to restore from backup: '+ABackupPath, nil, pmMarkdown);
+    Exit;
+  end;
+  DeleteFileUTF8(ABackupPath);  // clean up .bak after successful revert
+  aParent:=ExtractFileDir(AFilePath);
+  if aParent=EmptyStr then
+    aParent:=PathDelim;
+  DirHandler(aParent, AOffset);
+end;
+
+procedure TShellThread.CallbackRevert(const AToken: String);
+var
+  aValue, aPath, aBackupPath: String;
+  aOffset: Integer;
+begin
+  if not PathByToken(AToken, aValue) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleDeleteMsg);
+    Exit;
+  end;
+  // token: 'offset|<filepath>|<backuppath>'
+  aOffset:=0;
+  if Pos(_OfsSep, aValue)>0 then
+    SplitPageToken(aValue, aPath, aOffset);
+  if not GetEditState(aPath, aPath,{%H-}aValue{unused}, aBackupPath) then
+    aBackupPath:=BackupPathFor(aPath);
+  DoRevert(aPath, aBackupPath, aOffset);
 end;
 
 procedure TShellThread.AskDeleteConfirm(const aPath: String; aOffset: Integer);
@@ -1016,7 +1396,9 @@ begin
   try
     aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
     BuildFileCardKeyboard(AddPathRef(aPath),
-      AddPathRef(aPageToken+aPath), AddPathRef(aPageToken+aParent),
+      AddPathRef(aPath), // edit: same file token the download action uses
+      AddPathRef(aPageToken+aPath),
+      AddPathRef(aPageToken+aParent),
       aReplyMarkup.InlineKeyBoard);
     ConfirmDone(aMsg, aReplyMarkup, pmMarkdown);
   finally

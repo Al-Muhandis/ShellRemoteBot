@@ -52,8 +52,17 @@ type
 
   TTestFileCardKeyboard = class(TTestCase)
   published
-    procedure TestThreeButtonsInOneRow;
+    procedure TestFourButtonsInOneRow;
     procedure TestButtonsCarryVerbsAndStyles;
+  end;
+
+  { TTestRevertConfirmKeyboard }
+
+  TTestRevertConfirmKeyboard = class(TTestCase)
+  published
+    procedure TestTwoButtonsInOneRow;
+    procedure TestOkButtonDangerWithRevertCallback;
+    procedure TestCancelButtonPrimaryWithCancelCallback;
   end;
 
   { TTestRunPanelKeyboard }
@@ -282,22 +291,23 @@ end;
 
 { TTestFileCardKeyboard }
 
-procedure TTestFileCardKeyboard.TestThreeButtonsInOneRow;
+procedure TTestFileCardKeyboard.TestFourButtonsInOneRow;
 var
   Keyboard: TInlineKeyboard;
   Row: TInlineKeyboardButtons;
 begin
   Keyboard:=TInlineKeyboard.Create;
   try
-    BuildFileCardKeyboard('11', '12', '13', Keyboard);
+    BuildFileCardKeyboard('11', '12', '13', '14', Keyboard);
     AssertEquals('actions share one row', 1, Keyboard.Count);
     Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
-    AssertEquals(3, Row.Count);
+    AssertEquals(4, Row.Count);
     // expected values are spelled out: the test pins the exact Bot API wire
     // values, not what the shellthread constants happen to expand to
     AssertEquals('⬇ Download', TInlineKeyboardButton(Row.Items[0]).text);
-    AssertEquals('🗑 Delete', TInlineKeyboardButton(Row.Items[1]).text);
-    AssertEquals('◀ Back', TInlineKeyboardButton(Row.Items[2]).text);
+    AssertEquals('✏ Edit', TInlineKeyboardButton(Row.Items[1]).text);
+    AssertEquals('🗑 Delete', TInlineKeyboardButton(Row.Items[2]).text);
+    AssertEquals('◀ Back', TInlineKeyboardButton(Row.Items[3]).text);
   finally
     Keyboard.Free;
   end;
@@ -310,17 +320,72 @@ var
 begin
   Keyboard:=TInlineKeyboard.Create;
   try
-    BuildFileCardKeyboard('11', '12', '13', Keyboard);
+    BuildFileCardKeyboard('11', '12', '13', '14', Keyboard);
     Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
-    // download is the positive action, delete the destructive one, back the
-    // neutral escape route; delete only ASKS (askdelete): the deletion itself
-    // is performed by the Ok button of the confirmation, never by the card
+    // download is the positive action, edit is the main workflow (primary),
+    // delete the destructive one, back the neutral escape route; delete only
+    // ASKS (askdelete): the deletion itself is performed by the Ok button
+    // of the confirmation, never by the card
     AssertEquals('download 11', TInlineKeyboardButton(Row.Items[0]).callback_data);
     AssertEquals('success', TInlineKeyboardButton(Row.Items[0]).Style);
-    AssertEquals('askdelete 12', TInlineKeyboardButton(Row.Items[1]).callback_data);
-    AssertEquals('danger', TInlineKeyboardButton(Row.Items[1]).Style);
-    AssertEquals('dir 13', TInlineKeyboardButton(Row.Items[2]).callback_data);
-    AssertEquals('primary', TInlineKeyboardButton(Row.Items[2]).Style);
+    AssertEquals('edit 12', TInlineKeyboardButton(Row.Items[1]).callback_data);
+    AssertEquals('primary', TInlineKeyboardButton(Row.Items[1]).Style);
+    AssertEquals('askdelete 13', TInlineKeyboardButton(Row.Items[2]).callback_data);
+    AssertEquals('danger', TInlineKeyboardButton(Row.Items[2]).Style);
+    AssertEquals('dir 14', TInlineKeyboardButton(Row.Items[3]).callback_data);
+    AssertEquals('primary', TInlineKeyboardButton(Row.Items[3]).Style);
+  finally
+    Keyboard.Free;
+  end;
+end;
+
+{ TTestRevertConfirmKeyboard }
+
+procedure TTestRevertConfirmKeyboard.TestTwoButtonsInOneRow;
+var
+  Keyboard: TInlineKeyboard;
+  Row: TInlineKeyboardButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    BuildRevertConfirmKeyboard('42', Keyboard);
+    AssertEquals('single confirmation row', 1, Keyboard.Count);
+    Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
+    AssertEquals(2, Row.Count);
+    AssertEquals('Ok', TInlineKeyboardButton(Row.Items[0]).text);
+    AssertEquals('Cancel', TInlineKeyboardButton(Row.Items[1]).text);
+  finally
+    Keyboard.Free;
+  end;
+end;
+
+procedure TTestRevertConfirmKeyboard.TestOkButtonDangerWithRevertCallback;
+var
+  Keyboard: TInlineKeyboard;
+  Row: TInlineKeyboardButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    BuildRevertConfirmKeyboard('99', Keyboard);
+    Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
+    AssertEquals('revert 99', TInlineKeyboardButton(Row.Items[0]).callback_data);
+    AssertEquals('danger', TInlineKeyboardButton(Row.Items[0]).Style);
+  finally
+    Keyboard.Free;
+  end;
+end;
+
+procedure TTestRevertConfirmKeyboard.TestCancelButtonPrimaryWithCancelCallback;
+var
+  Keyboard: TInlineKeyboard;
+  Row: TInlineKeyboardButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    BuildRevertConfirmKeyboard('7', Keyboard);
+    Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
+    AssertEquals('cancel', TInlineKeyboardButton(Row.Items[1]).callback_data);
+    AssertEquals('primary', TInlineKeyboardButton(Row.Items[1]).Style);
   finally
     Keyboard.Free;
   end;
@@ -399,6 +464,7 @@ initialization
   RegisterTest(TTestBotCommandList);
   RegisterTest(TTestFileCardHelpers);
   RegisterTest(TTestFileCardKeyboard);
+  RegisterTest(TTestRevertConfirmKeyboard);
   RegisterTest(TTestRunPanelKeyboard);
 
 end.
