@@ -37,6 +37,9 @@ type
     FChatDirs: TStringList; // chat id -> current folder (also the pending upload folder)
     FLPTimeout: Integer;
     FShellOwnGroup: Boolean; // the shell leads its own process group (safe to killpg)
+    FPanelToken: String;   // FPaths token of the live run panel; EmptyStr = none
+    FPanelChatId: Int64;   // chat the live run panel message was sent to
+    FPanelMsgId: Int64;    // message id the panel buttons edit; 0 = no live panel
     procedure BotReceiveCallbackQuery({%H-}ASender: TObject; ACallback: TCallbackQueryObj);
     procedure BotReceiveDeleteCommand({%H-}ASender: TObject; const {%H-}ACommand: String;
       AMessage: TTelegramMessageObj);
@@ -72,11 +75,17 @@ type
     procedure CallbackFile(const AToken: String);
     procedure CallbackInput(const AToken: String);
     procedure CallbackScript(const AToken: String);
+    procedure CallbackPanelRead(const AToken: String);
+    {$IFDEF UNIX}procedure CallbackPanelSignal(const AToken: String; ASignal: Byte);{$ENDIF}
     { Shows AMsg in place of the current message (optionally with a keyboard),
       falling back to a fresh message when the original is older than the
       Telegram edit limit }
     procedure ConfirmDone(const AMsg: String; AReplyMarkup: TReplyMarkup = nil;
       AMode: TParseMode = pmDefault);
+    { Clears the live panel state without touching the panel message }
+    procedure ForgetPanel;
+    { Turns the live run panel into a plain Done note, retiring its buttons }
+    procedure MarkPanelDone;
     function PathByToken(const AToken: String; out APath: String): Boolean;
     function CommandStart: Boolean;
     function CheckIsAdmin: Boolean;
@@ -95,10 +104,16 @@ type
     class function FormatPath(const aPath: String): String;
     function GetChatDir(AChatId: Int64; out ADir: String): Boolean;
     function GetLogger: TEventLog;
-    procedure OutputStd(const NoOutput: String = '');
+    { Drains the shell output pipe after a short pause and returns the freshly
+      printed text, converted to UTF-8 on Windows; empty when nothing came }
+    function ReadShellOutput: String;
+    { Reads the shell output and delivers it to the chat (or ANoOutput when
+      nothing came); returns what was actually printed }
+    function OutputStd(const NoOutput: String = ''): String;
     procedure SetChatDir(AChatId: Int64; const ADir: String);
+    procedure SendRunPanel;
     procedure SendToShellTerminal(const InputString: String);
-    {$IFDEF UNIX}procedure SendSIG(SigNumber: Byte);{$ENDIF}
+    {$IFDEF UNIX}function SendSIG(SigNumber: Byte): Boolean;{$ENDIF}
     {$IFDEF UNIX}procedure ShellForkEvent(Sender: TObject);{$ENDIF}
     procedure StartShell;
     procedure SetLogger(AValue: TEventLog);
@@ -119,6 +134,12 @@ procedure BuildDeleteConfirmKeyboard(const AToken: String; AKeyboard: TInlineKey
   style }
 procedure BuildFileCardKeyboard(const ADownToken, ADeleteToken,
   ABackToken: String; AKeyboard: TInlineKeyboard);
+
+{ Fills AKeyboard with the run panel actions of a long-running command:
+  SIGINT and SIGKILL on UNIX only (signals are not deliverable elsewhere) and
+  Read everywhere; every button carries its callback token and a Bot API 10.3
+  style }
+procedure BuildRunPanelKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
 
 { Formats a byte count the human way: whole bytes under 1 KiB, then the largest
   fitting 1024-based unit with one decimal (K/M/G/T). Integer math only, so the
@@ -142,7 +163,8 @@ procedure BuildBotCommands(ACommands: TBotCommandArray);
 implementation
 
 uses
-  configuration, strutils, LazFileUtils, FileUtil, tgutils, LazUTF8, fphttpclient
+  configuration, strutils, LazFileUtils, FileUtil, tgutils, LazUTF8, fphttpclient,
+  fpjson
   {$IFDEF UNIX}, DateUtils{$ENDIF}
   ;
 
@@ -164,6 +186,10 @@ const
                          // must also fit into the 100-button Telegram hard limit
   _OfsSep = '|';         // page token separator: '<offset>|<path>'
   _StaleListMsg = 'Listing is outdated. Call /dir again';
+  _StalePanelMsg = 'The control panel is outdated (the command has finished or the bot was restarted)';
+  _RunPanelMsg = '⏳ Command is running…';
+  _PanelDoneMsg = '✔ Done';
+  _MaxMsgLen = 4096;     // the Telegram hard limit for one message text
   _MaxSendDocSize = 50*1024*1024; // the Bot API hard limit for one document:
                                   // larger files must not even be attempted
 
@@ -179,6 +205,9 @@ const
                           // only ever performed by dt_dlt after Ok
   dt_dlt='delete';
   dt_cancel='cancel';
+  {%H-}dt_sigint='sigint';    // run panel buttons: the panel of a command with no
+  {%H-}dt_sigkill='sigkill';  // output yet; the signal ones exist on UNIX only
+  dt_read='read';
 
   // Bot API 10.3 button styles (TInlineKeyboardButton.Style); 'link' is the
   // remaining style of the set, unused so far. Named so no raw style strings
@@ -285,8 +314,8 @@ begin
     aCmd:=Copy(aCmd, 1, p-1);
   end;
   // aName is a token into FPaths ('dir 12', 'file 34', 'download 56',
-  // 'script 7', 'input 42', 'askdelete 5', 'delete 3'); 'cancel' carries
-  // no token
+  // 'script 7', 'input 42', 'askdelete 5', 'delete 3', 'read 9' of the run
+  // panel, on UNIX also 'sigint 8'/'sigkill 4'); 'cancel' carries no token
   case aCmd of
     dt_script:  CallbackScript(aName);
     dt_dir:     CallbackDir(aName);
@@ -295,6 +324,11 @@ begin
     dt_input:   CallbackInput(aName);
     dt_dltask:  CallbackDeleteAsk(aName);
     dt_dlt:     CallbackDelete(aName);
+    {$IFDEF UNIX}
+    dt_sigint:  CallbackPanelSignal(aName, SIGINT);
+    dt_sigkill: CallbackPanelSignal(aName, SIGKILL);
+    {$ENDIF}
+    dt_read:    CallbackPanelRead(aName);
     dt_cancel:  CallbackCancel;
   end;
 end;
@@ -331,6 +365,28 @@ begin
   AKeyboard.AddButton(aBtn, 3);
   aBtn:=TInlineKeyboardButton.Create('◀ Back');
   aBtn.callback_data:=dt_dir+' '+ABackToken;
+  aBtn.Style:=btnStylePrimary;
+  AKeyboard.AddButton(aBtn, 3);
+end;
+
+procedure BuildRunPanelKeyboard(const AToken: String; AKeyboard: TInlineKeyboard);
+var
+  aBtn: TInlineKeyboardButton;
+begin
+  {$IFDEF UNIX}
+  // signals are delivered by killpg and exist on UNIX only: the panel is
+  // assembled conditionally, exactly like the /sig* command handlers
+  aBtn:=TInlineKeyboardButton.Create('⏹ SIGINT');
+  aBtn.callback_data:=dt_sigint+' '+AToken;
+  aBtn.Style:=btnStyleDanger;
+  AKeyboard.AddButton(aBtn, 3);
+  aBtn:=TInlineKeyboardButton.Create('✖ SIGKILL');
+  aBtn.callback_data:=dt_sigkill+' '+AToken;
+  aBtn.Style:=btnStyleDanger;
+  AKeyboard.AddButton(aBtn, 3);
+  {$ENDIF}
+  aBtn:=TInlineKeyboardButton.Create('📖 Read');
+  aBtn.callback_data:=dt_read+' '+AToken;
   aBtn.Style:=btnStylePrimary;
   AKeyboard.AddButton(aBtn, 3);
 end;
@@ -414,8 +470,11 @@ end;
 procedure TShellThread.BotReceiveReadCommand(ASender: TObject;
   const ACommand: String; AMessage: TTelegramMessageObj);
 begin
+  // the same read the run panel Read button performs: fresh output also
+  // proves the command of a still open panel is over
   if CommandStart then
-    OutputStd('No new messages in the terminal');
+    if OutputStd('No new messages in the terminal')<>EmptyStr then
+      MarkPanelDone;
 end;
 
 procedure TShellThread.BotReceiveScriptsCommand(ASender: TObject; const ACommand: String; AMessage: TTelegramMessageObj
@@ -608,6 +667,62 @@ begin
   ConfirmDone('Deletion cancelled');
 end;
 
+procedure TShellThread.CallbackPanelRead(const AToken: String);
+var
+  aValue, aOut: String;
+begin
+  // a button of an already retired panel must not read the shell: only the
+  // token of the live panel passes (an old message survives a bot restart
+  // with its buttons, the tokens do not)
+  if (AToken<>FPanelToken) or (not PathByToken(AToken, aValue)) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StalePanelMsg);
+    Exit;
+  end;
+  // the very read /read performs, only the fresh output is returned instead
+  // of being sent right away
+  aOut:=ReadShellOutput;
+  if aOut=EmptyStr then
+    // nothing yet: the panel stays, the command may still be running
+    FBot.sendMessageSafe('No new messages in the terminal')
+  else
+  begin
+    // output proves the command is over: the panel message becomes the
+    // output itself (the edit drops the keyboard) when it fits one message
+    if (Length(IsolateShellOutput(aOut))<_MaxMsgLen) and
+       FBot.editMessageText(IsolateShellOutput(aOut), FPanelChatId, FPanelMsgId,
+         pmMarkdown, True) then
+      ForgetPanel
+    else
+    begin
+      // too long to edit or the edit failed (e.g. the 48-hours limit): the
+      // output goes out in parts and the panel only notes the completion
+      FBot.sendMessageCode(aOut);
+      MarkPanelDone;
+    end;
+  end;
+end;
+
+{$IFDEF UNIX}
+procedure TShellThread.CallbackPanelSignal(const AToken: String; ASignal: Byte);
+var
+  aValue: String;
+begin
+  // a button of an already retired panel must never signal whatever the
+  // shell runs now: only the token of the live panel passes
+  if (AToken<>FPanelToken) or (not PathByToken(AToken, aValue)) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StalePanelMsg);
+    Exit;
+  end;
+  // the whole /sigint//sigkill logic lives in SendSIG: killpg on the shell
+  // session, the output flush and the restart note
+  if SendSIG(ASignal) then
+    // the shell died by the signal: nothing is left to control
+    MarkPanelDone;
+end;
+{$ENDIF}
+
 procedure TShellThread.ConfirmDone(const AMsg: String; AReplyMarkup: TReplyMarkup;
   AMode: TParseMode);
 begin
@@ -617,6 +732,24 @@ begin
   // and rate limiting (429)
   if not FBot.editMessageText(AMsg, AMode, True, AReplyMarkup) then
     FBot.sendMessageSafe(AMsg, AMode, True, AReplyMarkup);
+end;
+
+procedure TShellThread.ForgetPanel;
+begin
+  FPanelToken:=EmptyStr;
+  FPanelChatId:=0;
+  FPanelMsgId:=0;
+end;
+
+procedure TShellThread.MarkPanelDone;
+begin
+  if FPanelMsgId=0 then
+    Exit;
+  // the edit drops the keyboard; the 48-hours edit limit falls back to a
+  // fresh note per the ConfirmDone pattern
+  if not FBot.editMessageText(_PanelDoneMsg, FPanelChatId, FPanelMsgId, pmDefault, True) then
+    FBot.sendMessageSafe(_PanelDoneMsg);
+  ForgetPanel;
 end;
 
 procedure TShellThread.CallbackInput(const AToken: String);
@@ -941,29 +1074,34 @@ begin
   Result:=emj_FileFolder+' '+mdCode+IncludeTrailingPathDelimiter(aPath)+mdCode+' '+emj_FileFolder;
 end;
 
-procedure TShellThread.OutputStd(const NoOutput: String);
+function TShellThread.ReadShellOutput: String;
 var
   CharBuffer: array [0..511] of char;
   ReadCount: integer;
-  OutputString: String;
 const
   SleepForOut = 100;  // Pause to wait for output
 begin
   Sleep(SleepForOut);
-  OutputString:=EmptyStr;
+  Result:=EmptyStr;
   while FProc.Output.NumBytesAvailable > 0 do
   begin
     ReadCount := FProc.Output.NumBytesAvailable;
     if ReadCount>Length(CharBuffer) then
       ReadCount:=Length(CharBuffer);
     FProc.Output.Read(CharBuffer{%H-}, ReadCount);
-    OutputString+=Copy(CharBuffer, 0, ReadCount);
-//    Write(StdOut, OutputString); // You can uncomment for debug
+    Result+=Copy(CharBuffer, 0, ReadCount);
+//    Write(StdOut, Result); // You can uncomment for debug
   end;
-  if (OutputString=EmptyStr) and (NoOutput<>EmptyStr) then
+  {$IFDEF MSWINDOWS}Result:=WinCPToUTF8(Result);{$ENDIF}
+end;
+
+function TShellThread.OutputStd(const NoOutput: String): String;
+begin
+  Result:=ReadShellOutput;
+  if (Result=EmptyStr) and (NoOutput<>EmptyStr) then
     FBot.sendMessageSafe(NoOutput)
   else
-    if not FBot.sendMessageCode({$IFDEF MSWINDOWS}WinCPToUTF8(OutputString){$ENDIF}{$IFDEF UNIX}OutputString{$ENDIF}) then
+    if not FBot.sendMessageCode(Result) then
       Logger.Error('['+ClassName+'.OutputStd] Can''t send message to bot!');
   // read stderr and write to our stderr ... crashing :((
   { while FProc.Stderr.NumBytesAvailable > 0 do
@@ -975,14 +1113,62 @@ begin
   end; }
 end;
 
+procedure TShellThread.SendRunPanel;
+var
+  aReplyMarkup: TReplyMarkup;
+  aChatId, aMsgId: Int64;
+  aToken: String;
+begin
+  // a new silent command replaces the previous panel: at most one live panel
+  // per chat keeps the message flow readable
+  MarkPanelDone;
+  // the token is registered before the message exists, its FPaths value is
+  // not used by the handlers: the live panel is identified by FPanelToken
+  aToken:=AddPathRef('panel');
+  aReplyMarkup:=TReplyMarkup.Create;
+  try
+    aReplyMarkup.InlineKeyBoard:=TInlineKeyboard.Create;
+    BuildRunPanelKeyboard(aToken, aReplyMarkup.InlineKeyBoard);
+    // the same chat resolution sendMessageSafe applies inside
+    aChatId:=FBot.CurrentChatId;
+    if aChatId=0 then
+      aChatId:=FBot.ServiceUser;
+    if FBot.sendMessageSafe(_RunPanelMsg, pmDefault, True, aReplyMarkup) then
+    begin
+      // the panel buttons must edit this very message later: its id comes
+      // back inside the send response ('result.message_id')
+      aMsgId:=0;
+      if FBot.JSONResponse is TJSONObject then
+        aMsgId:=TJSONObject(FBot.JSONResponse).Get('message_id', 0);
+      if aMsgId>0 then
+      begin
+        FPanelToken:=aToken;
+        FPanelChatId:=aChatId;
+        FPanelMsgId:=aMsgId;
+      end;
+    end;
+  finally
+    aReplyMarkup.Free;
+  end;
+end;
+
 procedure TShellThread.SendToShellTerminal(const InputString: String);
+var
+  aOut: String;
 begin
   // both the interactive commands and the script runs end up here: show the
   // typing status while the command makes its way through the shell pipes
   FBot.sendChatAction(FBot.CurrentChatId, caTyping);
-  OutputStd;
+  if OutputStd<>EmptyStr then
+    MarkPanelDone;  // the previous command just finished printing: its panel is over
   FProc.Input.Write(InputString[1], Length(InputString));
-  OutputStd;
+  aOut:=OutputStd;
+  if aOut=EmptyStr then
+    // nothing printed right away: the command may run long, hand out the
+    // control panel instead of leaving the user to guess and type /sigint//read
+    SendRunPanel
+  else
+    MarkPanelDone;  // output arrived, the command is over
 end;
 
 {$IFDEF UNIX}
@@ -995,10 +1181,13 @@ begin
     FpExit(126);  // abort the start: the parent falls back to a plain shell
 end;
 
-procedure TShellThread.SendSIG(SigNumber: Byte);
+{ Sends a signal to the shell session; returns True when the shell died by
+  the signal and was restarted, so the command cannot come back }
+function TShellThread.SendSIG(SigNumber: Byte): Boolean;
 var
   i: Integer;
 begin
+  Result:=False;
   if not (Assigned(FProc) and FProc.Running) then
     Exit;
   // Deliver the signal by kill(2) instead of terminal input bytes: without a
@@ -1024,6 +1213,7 @@ begin
     StartShell;
     Logger.Info('Shell terminated by signal '+IntToStr(SigNumber)+', restarted');
     FBot.sendMessageSafe('Shell terminated by signal '+IntToStr(SigNumber)+', restarted');
+    Result:=True;
   end;
 end;
 {$ENDIF}

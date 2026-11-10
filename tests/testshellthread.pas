@@ -56,6 +56,18 @@ type
     procedure TestButtonsCarryVerbsAndStyles;
   end;
 
+  { TTestRunPanelKeyboard }
+
+  TTestRunPanelKeyboard = class(TTestCase)
+  published
+    {$IFDEF UNIX}
+    procedure TestThreeButtonsInOneRow;
+    procedure TestButtonsCarryVerbsAndStyles;
+    {$ELSE}
+    procedure TestOnlyReadButtonOutsideUnix;
+    {$ENDIF}
+  end;
+
 implementation
 
 { TTestDeleteConfirmMarkup }
@@ -314,10 +326,79 @@ begin
   end;
 end;
 
+{ TTestRunPanelKeyboard }
+
+{$IFDEF UNIX}
+procedure TTestRunPanelKeyboard.TestThreeButtonsInOneRow;
+var
+  Keyboard: TInlineKeyboard;
+  Row: TInlineKeyboardButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    BuildRunPanelKeyboard('42', Keyboard);
+    AssertEquals('actions share one row', 1, Keyboard.Count);
+    Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
+    AssertEquals(3, Row.Count);
+    // expected values are spelled out: the test pins the exact Bot API wire
+    // values, not what the shellthread constants happen to expand to
+    AssertEquals('⏹ SIGINT', TInlineKeyboardButton(Row.Items[0]).text);
+    AssertEquals('✖ SIGKILL', TInlineKeyboardButton(Row.Items[1]).text);
+    AssertEquals('📖 Read', TInlineKeyboardButton(Row.Items[2]).text);
+  finally
+    Keyboard.Free;
+  end;
+end;
+
+procedure TTestRunPanelKeyboard.TestButtonsCarryVerbsAndStyles;
+var
+  Keyboard: TInlineKeyboard;
+  Row: TInlineKeyboardButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    BuildRunPanelKeyboard('42', Keyboard);
+    Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
+    // both signal buttons are destructive (they may restart the shell), read
+    // is the neutral one
+    AssertEquals('sigint 42', TInlineKeyboardButton(Row.Items[0]).callback_data);
+    AssertEquals('danger', TInlineKeyboardButton(Row.Items[0]).Style);
+    AssertEquals('sigkill 42', TInlineKeyboardButton(Row.Items[1]).callback_data);
+    AssertEquals('danger', TInlineKeyboardButton(Row.Items[1]).Style);
+    AssertEquals('read 42', TInlineKeyboardButton(Row.Items[2]).callback_data);
+    AssertEquals('primary', TInlineKeyboardButton(Row.Items[2]).Style);
+  finally
+    Keyboard.Free;
+  end;
+end;
+{$ELSE}
+procedure TTestRunPanelKeyboard.TestOnlyReadButtonOutsideUnix;
+var
+  Keyboard: TInlineKeyboard;
+  Row: TInlineKeyboardButtons;
+begin
+  Keyboard:=TInlineKeyboard.Create;
+  try
+    BuildRunPanelKeyboard('42', Keyboard);
+    // signals are delivered by killpg and have no meaning off UNIX: the panel
+    // carries Read only
+    AssertEquals('single Read row', 1, Keyboard.Count);
+    Row:=TInlineKeyboardButtons(Keyboard.Items[0]);
+    AssertEquals(1, Row.Count);
+    AssertEquals('📖 Read', TInlineKeyboardButton(Row.Items[0]).text);
+    AssertEquals('primary', TInlineKeyboardButton(Row.Items[0]).Style);
+    AssertEquals('read 42', TInlineKeyboardButton(Row.Items[0]).callback_data);
+  finally
+    Keyboard.Free;
+  end;
+end;
+{$ENDIF}
+
 initialization
   RegisterTest(TTestDeleteConfirmMarkup);
   RegisterTest(TTestBotCommandList);
   RegisterTest(TTestFileCardHelpers);
   RegisterTest(TTestFileCardKeyboard);
+  RegisterTest(TTestRunPanelKeyboard);
 
 end.

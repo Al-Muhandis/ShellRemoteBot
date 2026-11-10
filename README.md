@@ -121,9 +121,16 @@ On start the bot registers its commands in the Telegram command menu (`setMyComm
 ### /read
 Reads messages from the shell console.
 Sometimes the program does not wait for a response immediately after execution in the console, and in this case, you can read the newly appeared messages by the `/read` command.
+### Control panel for silent commands
+When a command is sent to the shell and prints no output right away, the bot posts a small control panel instead of leaving you guessing: `⏳ Command is running…` with the inline buttons
+- `⏹ SIGINT` and `✖ SIGKILL` (Unix only — the same signals as `/sigint` and `/sigkill`);
+- `📖 Read` — the same as `/read`: the fresh output is edited into the panel message when it fits, otherwise it is sent in parts as usual.
+
+A panel is retired (`✔ Done`, buttons removed) as soon as its command is known to be over: output arrives at the next interaction, a signal from the panel terminates the shell, or a new silent command supersedes the panel — at most one live panel stays in the chat. Like all inline buttons of the bot, the panel buttons keep temporary references that do not survive a bot restart: an old panel answers `The control panel is outdated…`.
 ### /sig and /sigXXXX
 It is worked under Unix systems. The signal is delivered by kill(2) to the whole process group of the shell, i.e. to the shell itself and to the command it is currently running.
 For example, `/sig 9` where 9 is kill sig number or You can send commands `/sigint`, `/sigkill`, `/sigquit` and `/sigterm`.
+The same SIGINT and SIGKILL are available as the buttons of the control panel of a long-running command (see above).
 The shell is started in its own session (setsid), so the signals never reach the bot itself.
 If the signal terminates the shell, it is restarted automatically with a fresh environment (the shell state like its working directory and variables is not preserved).
 ### /scripts
