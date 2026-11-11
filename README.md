@@ -10,6 +10,20 @@ The program can run as a regular console program or run as a daemon/service.
 
 Tested in Linux but You can try to use in other OS also. Developed with FreePascal. It depends on fp-telegram lib .
 
+## Screenshots
+
+| Terminal | Control panel for silent commands |
+|---|---|
+| ![Shell terminal: df and uptime](screenshots/terminal.png) | ![Control panel of a long-running command with SIGINT, SIGKILL and Read buttons](screenshots/control-panel.png) |
+
+| File manager (/dir) | File card |
+|---|---|
+| ![File manager listing with page navigation, file sizes, + Folder and Upload buttons](screenshots/file-manager.png) | ![File card with Download, Edit, Delete and Back buttons and the delete confirmation](screenshots/file-card.png) |
+
+| Editing a file | Scripts (macros) |
+|---|---|
+| ![Inline editing of a text file with automatic .bak backup](screenshots/edit-file.png) | ![Script menu and the output of an executed script](screenshots/scripts.png) |
+
 ## Script files (macros)
 You can specify predefined shell scripts. Create script file with extention `.script` in the same folder where INI file is located. 
 Get the script menu by command `/scripts`. Click the selected script.
