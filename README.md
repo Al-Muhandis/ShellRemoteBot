@@ -25,7 +25,11 @@ Clicking a file does not download it right away: the listing is replaced (edited
 
 You can set the default value in the configuration file (`DefaultDir` in `[File]` section)
 
-Big folders are split into pages navigated with the ◀️ / ▶️ buttons (90 entries per page). The `Upload...` button marks the folder as the upload destination: send a document as a reply to that bot message and it is saved into the folder.
+Big folders are split into pages navigated with the ◀️ / ▶️ buttons (90 entries per page); the ◀️ button shows the current position among the pages, e.g. `◀️ 2/5`. File buttons carry the human-readable size (`report.pdf (1.5 M)`); long names are trimmed with `…` so the buttons stay narrow.
+
+The `+ Folder` button creates a folder inside the current one: the bot asks for the name with a reply prompt — send the name as text, or `/cancel`. The name must be a single path element (no `/` or `\`, not `.` or `..`); a wrong name or an already existing folder is refused with the reason, and after a successful creation the listing is redrawn.
+
+The `Upload...` button marks the folder as the upload destination: send a document as a reply to that bot message and it is saved into the folder.
 
 The inline buttons keep temporary references to the listed paths, they do not survive a bot restart: after an upgrade an old listing answers `Listing is outdated. Call /dir again` and you simply call `/dir` again.
 

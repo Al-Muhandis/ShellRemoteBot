@@ -75,6 +75,7 @@ type
     procedure CallbackEdit(const AToken: String);
     procedure CallbackFile(const AToken: String);
     procedure CallbackInput(const AToken: String);
+    procedure CallbackMkdir(const AToken: String);
     procedure CallbackRevert(const AToken: String);
     procedure CallbackRevertAsk(const AToken: String);
     procedure CallbackScript(const AToken: String);
@@ -98,6 +99,11 @@ type
       ABackupPath: String): Boolean;
     function IsPendingEdit(AChatId: Int64): Boolean;
     procedure ClearPendingEdit(AChatId: Int64);
+    { Pending mkdir state: FChatDirs holds 'mkdir|<folder to create in>' for
+      the chat (the same slot the edit state uses, at most one pending action
+      per chat). The state is detected by the _MkdirMark prefix, so a plain
+      upload folder can never be mistaken for it }
+    function GetPendingMkdirDir(AChatId: Int64; out ADir: String): Boolean;
     { Saves ANewContent to AFilePath, creating a .bak backup first.
       Shows the result with a Revert button (dt_revertask). }
     procedure SaveEdit(const AFilePath, AOriginalContent, ANewContent: String);
@@ -184,6 +190,25 @@ function ModeToOctal(AMode: LongWord): String;
   a non-positive page size) always yields 0 }
 function ClampPageOffset(ATotal, AOffset, APageSize: Integer): Integer;
 
+{ Computes the number of /dir pages out of ATotal entries, ceil(ATotal /
+  APageSize) without floating point; ATotal<=0 or a non-positive APageSize
+  mean no pages at all }
+function PageCountOf(ATotal, APageSize: Integer): Integer;
+
+{ Builds a navigation button caption: the arrow plus the current page position
+  ('◀️ 2/5') when the total is known, the bare arrow when it is not
+  (ATotalPages<=0) }
+function PageNavLabel(const AArrow: String; APage, ATotalPages: Integer): String;
+
+{ Validates a folder name typed in reply to the '+ Folder' prompt: it must be
+  non-empty, a single path element (no '/' and no '\', whichever separator the
+  platform uses) and not '.'/'..'; AReason explains a rejection in UI words }
+function IsValidNewFolderName(const AName: String; out AReason: String): Boolean;
+
+{ Cuts a listing entry name down to _MaxListNameChars UTF-8 characters, marking
+  the cut with an ellipsis, so a long name cannot stretch its inline button }
+function TrimListingName(const AName: String): String;
+
 { Picks the input text of a message: the plain Text when present, otherwise
   the PlainText of a rich message (Bot API 10.1+, sent by the fresh Telegram
   clients when the user styles the input). Classic clients always fill Text,
@@ -223,8 +248,9 @@ const
 {$ENDIF}
   _ScriptFileExt='.script';
   _StaleDeleteMsg = 'Confirmation is outdated. Repeat /delete';
-  _MaxButtons = 90;      // entries per /dir page: '..' + prev/next + Upload
-                         // must also fit into the 100-button Telegram hard limit
+  _MaxButtons = 90;      // entries per /dir page: '..' + prev/next + the
+                         // '+ Folder'/Upload row must also fit into the
+                         // 100-button Telegram hard limit
   _OfsSep = '|';         // page token separator: '<offset>|<path>'
   _StaleListMsg = 'Listing is outdated. Call /dir again';
   _StalePanelMsg = 'The control panel is outdated (the command has finished or the bot was restarted)';
@@ -253,11 +279,19 @@ const
   {%H-}dt_sigint='sigint';    // run panel buttons: the panel of a command with no
   {%H-}dt_sigkill='sigkill';  // output yet; the signal ones exist on UNIX only
   dt_read='read';
+  dt_mkdir='mkdir';  // '+ Folder': creates a folder inside the current one
 
   // Edit feature constants
   _EditSep = '|';           // separator for pending edit state in FChatDirs:
                             // '|<original_content>|<backup_path>'
   _MaxEditContent = 3500;   // send inline when content fits this many chars
+  _MkdirMark = 'mkdir|';    // pending mkdir state in FChatDirs:
+                            // 'mkdir|<folder to create in>'
+
+  // Listing cosmetics
+  _MaxListNameChars = 24;   // entry name budget in a /dir button: longer names
+                            // are cut with an ellipsis so 2 buttons per row
+                            // stay narrow enough
 
   // Bot API 10.3 button styles (TInlineKeyboardButton.Style); 'link' is the
   // remaining style of the set, unused so far. Named so no raw style strings
@@ -297,9 +331,48 @@ var
   aTmpStream: TFileStream;
   aDocSize: Int64;
   aNewContent, aReplyText: String;
+  aMkdirDir, aFolderName, aNewDir, aReason: String;
 begin
   if not CommandStart then
     Exit;
+  if Assigned(AMessage.ReplyToMessage) and
+     GetPendingMkdirDir(FBot.CurrentChatId, aMkdirDir) then
+  begin
+    // ----- user replied to the '+ Folder' prompt -----
+    // the pending state is consumed either way: a wrong name means a fresh
+    // '+ Folder' press, not a half-open state (the mkdir branch runs before
+    // the edit branch, so a 'mkdir|...' state can never leak into edit
+    // parsing even for a folder whose name contains _EditSep)
+    ClearPendingEdit(FBot.CurrentChatId);
+    if Assigned(AMessage.Document) then
+      // a document cannot name a folder
+      FBot.sendMessage('Send the folder name as text, not as a file')
+    else
+    begin
+      aFolderName:=Trim(MessageInputText(AMessage));
+      if (aFolderName=EmptyStr) or (aFolderName='/cancel') then
+        ConfirmDone('Folder creation cancelled')
+      else
+        if not IsValidNewFolderName(aFolderName, aReason) then
+          // the user-typed name travels as plain text: it may hold characters
+          // a markdown parse mode would break on
+          FBot.sendMessage('Cannot create the folder: '+aReason)
+        else
+        begin
+          aNewDir:=aMkdirDir+aFolderName;
+          if DirectoryExistsUTF8(aNewDir) then
+            FBot.sendMessage('The folder already exists: '+aFolderName)
+          else
+            // CreateDirUTF8 reports its own success; the listing is redrawn
+            // from the same folder, which doubles as the created-note
+            if CreateDirUTF8(aNewDir) then
+              DirHandler(aMkdirDir)
+            else
+              FBot.sendMessage('Failed to create the folder '+aFolderName);
+        end;
+    end;
+    Exit;
+  end;
   if Assigned(AMessage.ReplyToMessage) and IsPendingEdit(FBot.CurrentChatId) and
      GetChatDir(FBot.CurrentChatId, aPath) and
      GetEditState(aPath, aEditFile, aOrigContent, aEditBackup) then
@@ -382,9 +455,16 @@ begin
   InputString:=MessageInputText(AMessage);
   if InputString=EmptyStr then
     Exit;
-  // /cancel from the user: clear any pending edit state
+  // /cancel from the user: clear any pending per-chat state (a bare /cancel
+  // without a reply must work the same as a /cancel answer to the prompt)
   if InputString='/cancel' then
   begin
+    if GetPendingMkdirDir(FBot.CurrentChatId, aMkdirDir) then
+    begin
+      ClearPendingEdit(FBot.CurrentChatId);
+      ConfirmDone('Folder creation cancelled');
+    end
+    else
     if IsPendingEdit(FBot.CurrentChatId) then
     begin
       ClearPendingEdit(FBot.CurrentChatId);
@@ -446,8 +526,8 @@ begin
     aCmd:=Copy(aCmd, 1, p-1);
   end;
   // aName is a token into FPaths ('dir 12', 'file 34', 'download 56',
-  // 'script 7', 'input 42', 'askdelete 5', 'delete 3', 'read 9' of the run
-  // panel, on UNIX also 'sigint 8'/'sigkill 4'); 'cancel' carries no token
+  // 'script 7', 'input 42', 'mkdir 8', 'askdelete 5', 'delete 3', 'read 9' of
+  // the run panel, on UNIX also 'sigint 8'/'sigkill 4'); 'cancel' carries no token
   case aCmd of
     dt_script:  CallbackScript(aName);
     dt_dir:     CallbackDir(aName);
@@ -455,6 +535,7 @@ begin
     dt_down:    CallbackDownload(aName);
     dt_edit:    CallbackEdit(aName);
     dt_input:   CallbackInput(aName);
+    dt_mkdir:   CallbackMkdir(aName);
     dt_dltask:  CallbackDeleteAsk(aName);
     dt_dlt:     CallbackDelete(aName);
     dt_revertask: CallbackRevertAsk(aName);
@@ -586,6 +667,59 @@ begin
   Result:=((ATotal-1) div APageSize)*APageSize; // the last non-empty page
   if AOffset<Result then
     Result:=AOffset;
+end;
+
+function PageCountOf(ATotal, APageSize: Integer): Integer;
+begin
+  // ceil(ATotal/APageSize) in integer math: a partial page is still a page
+  if (ATotal<=0) or (APageSize<=0) then
+    Exit(0);
+  Result:=(ATotal+APageSize-1) div APageSize;
+end;
+
+function PageNavLabel(const AArrow: String; APage, ATotalPages: Integer): String;
+begin
+  Result:=AArrow;
+  if ATotalPages>0 then
+    Result+=' '+IntToStr(APage)+'/'+IntToStr(ATotalPages);
+end;
+
+function IsValidNewFolderName(const AName: String; out AReason: String): Boolean;
+var
+  aTrimmed: String;
+begin
+  aTrimmed:=Trim(AName);
+  Result:=False;
+  AReason:=EmptyStr;
+  if aTrimmed=EmptyStr then
+  begin
+    AReason:='the name is empty';
+    Exit;
+  end;
+  // both separators are rejected on every platform: the name must stay a
+  // single path element wherever the bot runs
+  if (Pos('/', aTrimmed)>0) or (Pos('\', aTrimmed)>0) then
+  begin
+    AReason:='the name must not contain path separators';
+    Exit;
+  end;
+  if (aTrimmed='.') or (aTrimmed='..') then
+  begin
+    // '.' and '..' are navigation, not names: '..' would climb out of the
+    // folder the state points at
+    AReason:='the name must not be "." or ".."';
+    Exit;
+  end;
+  Result:=True;
+end;
+
+function TrimListingName(const AName: String): String;
+begin
+  // count characters, not bytes: a name in a multibyte encoding must keep
+  // its share of the button width
+  Result:=AName;
+  if UTF8Length(Result)>_MaxListNameChars then
+    Result:=UTF8Copy(Result, 1, _MaxListNameChars-1)+'…';
 end;
 
 function MessageInputText(AMessage: TTelegramMessageObj): String;
@@ -921,6 +1055,17 @@ begin
   SetChatDir(AChatId, EmptyStr);
 end;
 
+function TShellThread.GetPendingMkdirDir(AChatId: Int64; out ADir: String): Boolean;
+var
+  aValue: String;
+begin
+  ADir:=EmptyStr;
+  Result:=GetChatDir(AChatId, aValue) and
+    (Copy(aValue, 1, Length(_MkdirMark))=_MkdirMark);
+  if Result then
+    ADir:=Copy(aValue, Length(_MkdirMark)+1, MaxInt);
+end;
+
 // ----- Save edit (with backup) ----------------------------------------------
 
 procedure TShellThread.SaveEdit(const AFilePath, AOriginalContent,
@@ -1217,6 +1362,31 @@ begin
   Result:=FPaths.Add(APath);
 end;
 
+procedure TShellThread.CallbackMkdir(const AToken: String);
+var
+  aDir: String;
+  aReplyMarkup: TReplyMarkup;
+begin
+  if not PathByToken(AToken, aDir) then
+  begin
+    FBot.sendMessage(emj_Wrnng+' '+_StaleListMsg);
+    Exit;
+  end;
+  aDir:=IncludeTrailingPathDelimiter(aDir);
+  // the folder to create in travels through the per-chat pending state
+  // (the upload-flow pattern), never through the reply message text
+  SetChatDir(FBot.CurrentChatId, _MkdirMark+aDir);
+  aReplyMarkup:=TReplyMarkup.Create;
+  try
+    aReplyMarkup.ForceReply:=True;
+    aReplyMarkup.InputFieldPlaceholder:='New folder name';
+    FBot.sendMessage(FormatPath(aDir)+LineEnding+'Send the new folder name, or /cancel',
+      pmMarkdown, True, aReplyMarkup);
+  finally
+    aReplyMarkup.Free;
+  end;
+end;
+
 function TShellThread.PathByToken(const AToken: String; out APath: String): Boolean;
 begin
   Result:=FPaths.Find(AToken, APath);
@@ -1308,9 +1478,11 @@ var
   s, aName, aDir, aParent: String;
   aDirs, aFiles: TStringList;
   aReplyMarkup: TReplyMarkup;
-  aNavRow: TInlineKeyboardButtons;
-  aUploadBtn: TInlineKeyboardButton;
+  aNavRow, aActionRow: TInlineKeyboardButtons;
+  aEntryBtn: TInlineKeyboardButton;
   i, aTotal, aPageEnd, aShown, aPrev: Integer;
+  aTotalPages, aPageNum: Integer;
+  aInfo: TFileStatInfo;
 begin
   aDir:=IncludeTrailingPathDelimiter(aPath);
   // the current folder is tracked per chat: the '..' button and the upload
@@ -1334,11 +1506,14 @@ begin
     // that still has entries instead
     aOffset:=ClampPageOffset(aTotal, aOffset, _MaxButtons);
     aPageEnd:=aOffset+_MaxButtons;
+    aTotalPages:=PageCountOf(aTotal, _MaxButtons);
+    aPageNum:=aOffset div _MaxButtons+1;
     aShown:=0;
     for i:=0 to aDirs.Count-1 do
       if (i>=aOffset) and (i<aPageEnd) then
       begin
-        aName:=ExtractFileName(aDirs[i]);
+        // long names are cut so two buttons per row stay narrow
+        aName:=TrimListingName(ExtractFileName(aDirs[i]));
         aReplyMarkup.InlineKeyBoard.AddButton(emj_FileFolder+' '+aName,
           dt_dir+' '+AddPathRef(IncludeTrailingPathDelimiter(aDirs[i])), 2);
         Inc(aShown);
@@ -1346,14 +1521,20 @@ begin
     for i:=0 to aFiles.Count-1 do
       if (aDirs.Count+i>=aOffset) and (aDirs.Count+i<aPageEnd) then
       begin
-        aName:=ExtractFileName(aFiles[i]);
+        aName:=TrimListingName(ExtractFileName(aFiles[i]));
+        // the size next to the name spares opening the card just to see how
+        // big the file is; a vanished file simply shows without the size
+        aInfo:=GetFileStatInfo(aFiles[i]);
+        if aInfo.Found then
+          aName+=' ('+FormatFileSize(aInfo.Size)+')';
         // the file token carries the page offset ('<offset>|<path>'): the
         // card it opens sends Back and delete-return to the same page
         aReplyMarkup.InlineKeyBoard.AddButton(aName,
           dt_file+' '+AddPathRef(IntToStr(aOffset)+_OfsSep+aFiles[i]), 2);
         Inc(aShown);
       end;
-    // prev/next page buttons share one row
+    // prev/next page buttons share one row; the prev button carries the page
+    // position ('◀️ 2/5'), next stays the bare arrow
     aNavRow:=nil;
     if aOffset>0 then
     begin
@@ -1361,7 +1542,8 @@ begin
       if aPrev<0 then
         aPrev:=0;
       aNavRow:=aReplyMarkup.InlineKeyBoard.Add;
-      aNavRow.AddButton('◀️', dt_dir+' '+AddPathRef(IntToStr(aPrev)+_OfsSep+aDir));
+      aNavRow.AddButton(PageNavLabel('◀️', aPageNum, aTotalPages),
+        dt_dir+' '+AddPathRef(IntToStr(aPrev)+_OfsSep+aDir));
     end;
     if aPageEnd<aTotal then
     begin
@@ -1369,12 +1551,18 @@ begin
         aNavRow:=aReplyMarkup.InlineKeyBoard.Add;
       aNavRow.AddButton('▶️', dt_dir+' '+AddPathRef(IntToStr(aPageEnd)+_OfsSep+aDir));
     end;
-    // the upload action is the positive one: it gets its own row and the
-    // Bot API 10.3 success style
-    aUploadBtn:=TInlineKeyboardButton.Create('Upload...');
-    aUploadBtn.callback_data:=dt_input+' '+AddPathRef(aDir);
-    aUploadBtn.Style:=btnStyleSuccess;
-    aReplyMarkup.InlineKeyBoard.Add.Add(aUploadBtn);
+    // the folder actions share one row and both are positive actions (the
+    // Bot API 10.3 success style): '+ Folder' opens the mkdir flow, Upload
+    // marks the folder as the upload destination
+    aActionRow:=aReplyMarkup.InlineKeyBoard.Add;
+    aEntryBtn:=TInlineKeyboardButton.Create('+ Folder');
+    aEntryBtn.callback_data:=dt_mkdir+' '+AddPathRef(aDir);
+    aEntryBtn.Style:=btnStyleSuccess;
+    aActionRow.Add(aEntryBtn);
+    aEntryBtn:=TInlineKeyboardButton.Create('Upload...');
+    aEntryBtn.callback_data:=dt_input+' '+AddPathRef(aDir);
+    aEntryBtn.Style:=btnStyleSuccess;
+    aActionRow.Add(aEntryBtn);
     s:=FormatPath(aDir);
     if (aOffset>0) or (aPageEnd<aTotal) then
       s+=LineEnding+Format('Entries %d-%d of %d', [aOffset+1, aOffset+aShown, aTotal]);

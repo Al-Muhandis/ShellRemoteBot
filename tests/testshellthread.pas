@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, fpcunit, testregistry, fpjson, tgtypes, tgsendertypes,
-  shellthread
+  LazUTF8, shellthread
   ;
 
 type
@@ -102,6 +102,23 @@ type
     procedure TestKeyboardRowsMirroredToButtonsBlocks;
     procedure TestKeyboardStylesCopied;
     procedure TestNilKeyboardYieldsNoButtonsBlocks;
+  end;
+
+  { TTestDirListingHelpers }
+
+  TTestDirListingHelpers = class(TTestCase)
+  published
+    procedure TestPageCountOfCeils;
+    procedure TestPageCountOfEmptyOrInvalid;
+    procedure TestPageNavLabelWithTotal;
+    procedure TestPageNavLabelBareArrowWithoutTotal;
+    procedure TestValidFolderNames;
+    procedure TestFolderNameRejectedEmpty;
+    procedure TestFolderNameRejectedPathSeparators;
+    procedure TestFolderNameRejectedDotDot;
+    procedure TestTrimListingNameKeepsShort;
+    procedure TestTrimListingNameCutsLong;
+    procedure TestTrimListingNameCountsCharsNotBytes;
   end;
 
 implementation
@@ -662,6 +679,111 @@ begin
   end;
 end;
 
+{ TTestDirListingHelpers }
+
+procedure TTestDirListingHelpers.TestPageCountOfCeils;
+begin
+  // ceil(total/90): a partial page still counts as a page
+  AssertEquals(1, PageCountOf(1, 90));
+  AssertEquals(1, PageCountOf(90, 90));
+  AssertEquals(2, PageCountOf(91, 90));
+  AssertEquals(2, PageCountOf(180, 90));
+  AssertEquals(3, PageCountOf(181, 90));
+end;
+
+procedure TTestDirListingHelpers.TestPageCountOfEmptyOrInvalid;
+begin
+  // an empty folder and a broken page size mean no navigation at all
+  AssertEquals(0, PageCountOf(0, 90));
+  AssertEquals(0, PageCountOf(-1, 90));
+  AssertEquals(0, PageCountOf(50, 0));
+  AssertEquals(0, PageCountOf(50, -3));
+end;
+
+procedure TTestDirListingHelpers.TestPageNavLabelWithTotal;
+begin
+  // the arrow carries the current position among the pages
+  AssertEquals('◀️ 2/5', PageNavLabel('◀️', 2, 5));
+  AssertEquals('▶️ 4/5', PageNavLabel('▶️', 4, 5));
+end;
+
+procedure TTestDirListingHelpers.TestPageNavLabelBareArrowWithoutTotal;
+begin
+  // an unknown total (no entries at all) leaves the bare arrow
+  AssertEquals('▶️', PageNavLabel('▶️', 1, 0));
+  AssertEquals('◀️', PageNavLabel('◀️', 3, -1));
+end;
+
+procedure TTestDirListingHelpers.TestValidFolderNames;
+var
+  aReason: String;
+begin
+  aReason:='x';
+  AssertTrue('plain name', IsValidNewFolderName('data', aReason));
+  AssertTrue('name with spaces and dots', IsValidNewFolderName('my data 2024 v1.2', aReason));
+  AssertTrue('unicode name', IsValidNewFolderName('Данные', aReason));
+  AssertTrue('no reason on success', aReason='');
+end;
+
+procedure TTestDirListingHelpers.TestFolderNameRejectedEmpty;
+var
+  aReason: String;
+begin
+  AssertFalse(IsValidNewFolderName('', aReason));
+  AssertTrue('reason is given', aReason<>'');
+  AssertFalse('whitespace-only is empty too', IsValidNewFolderName('   ', aReason));
+end;
+
+procedure TTestDirListingHelpers.TestFolderNameRejectedPathSeparators;
+var
+  aReason: String;
+begin
+  // both separators are rejected on every platform, not only the local
+  // PathDelim: the name must stay a single path element wherever the bot runs
+  AssertFalse(IsValidNewFolderName('a/b', aReason));
+  AssertFalse(IsValidNewFolderName('a\b', aReason));
+  AssertFalse(IsValidNewFolderName('a'+PathDelim+'b', aReason));
+end;
+
+procedure TTestDirListingHelpers.TestFolderNameRejectedDotDot;
+var
+  aReason: String;
+begin
+  // '.' and '..' are navigation, not names
+  AssertFalse(IsValidNewFolderName('.', aReason));
+  AssertFalse('.. climbs out of the folder', IsValidNewFolderName('..', aReason));
+end;
+
+procedure TTestDirListingHelpers.TestTrimListingNameKeepsShort;
+begin
+  AssertEquals('report.pdf', TrimListingName('report.pdf'));
+end;
+
+procedure TTestDirListingHelpers.TestTrimListingNameCutsLong;
+var
+  aTrimmed: String;
+begin
+  aTrimmed:=TrimListingName(StringOfChar('a', 100));
+  // the cut name fits the budget: 23 characters plus the ellipsis marker
+  AssertEquals(24, UTF8Length(aTrimmed));
+  AssertEquals('the cut is marked with an ellipsis', '…', UTF8Copy(aTrimmed, 24, 1));
+end;
+
+procedure TTestDirListingHelpers.TestTrimListingNameCountsCharsNotBytes;
+var
+  aName, aTrimmed: String;
+begin
+  // 24 cyrillic letters are 48 bytes: byte-based counting would cut a name
+  // that fits the character budget
+  aName:='Данные';
+  aName:=aName+aName+aName+aName;
+  AssertEquals(24, UTF8Length(aName));
+  AssertEquals('a fitting name passes unchanged', aName, TrimListingName(aName));
+  // twice over the budget: cut by characters, not bytes
+  aTrimmed:=TrimListingName(aName+aName);
+  AssertEquals(24, UTF8Length(aTrimmed));
+end;
+
 initialization
   RegisterTest(TTestDeleteConfirmMarkup);
   RegisterTest(TTestBotCommandList);
@@ -671,5 +793,6 @@ initialization
   RegisterTest(TTestRunPanelKeyboard);
   RegisterTest(TTestRichMessageInput);
   RegisterTest(TTestRichListing);
+  RegisterTest(TTestDirListingHelpers);
 
 end.
