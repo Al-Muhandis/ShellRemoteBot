@@ -1,6 +1,6 @@
 Package: tgshd
 Priority: optional
-Version: 1.2.5.12-1
+Version: 1.2.5.33-1
 Maintainer: Renat Suleymanov <mail@Renat.Su>
 Architecture: amd64
 Section: utils
@@ -9,3 +9,4 @@ Origin: https://github.com/Al-Muhandis/ShellRemoteBot
 Description: Shell remote app via telegram bot
  Helps you work with your server (or remote computer) via telegram bot 
  emulating terminal operations and a file manager functionality
+Installed-Size: 892

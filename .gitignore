@@ -4,6 +4,11 @@
 *.zip
 *.dat
 *.csv
+# Built Debian packages: never commit build artifacts, deploy them by hand
+*.deb
+# Screenshot mockup sources (HTML/CSS rendered to the README PNGs with a
+# headless browser); only the rendered screenshots/*.png are committed
+screenshots/src/
 # Lazarus compiler-generated binaries (safe to delete)
 *.exe
 *.dll
